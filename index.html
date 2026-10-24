@@ -119,7 +119,7 @@ input[type=text]{width:100%;padding:10px 12px;border-radius:10px;border:1px soli
 .toggle[aria-pressed="true"] .box2{background:var(--gold);border-color:var(--gold);color:var(--gold-ink)}
 .hero h1{font-size:40px;line-height:1;font-weight:800}
 .hero p{margin:8px 0 0;color:var(--muted);max-width:52ch}
-.fan{display:flex;gap:0;margin:14px 0 4px}
+.fan{display:flex;gap:0;margin:14px 0 16px}
 .fan .card{--cw:44px;margin-right:-12px;transform:rotate(calc((var(--i) - 2) * 7deg)) translateY(calc(var(--d) * 1px));cursor:default}
 
 table.score{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
@@ -155,16 +155,23 @@ a{color:var(--gold)}
 .cover .fan{justify-content:center}
 .msg.err{color:var(--err)}
 
+
+.tabs{display:flex;gap:4px;padding:4px;border-radius:14px;background:var(--rail);border:1px solid var(--line)}
+.tabs button{flex:1;border:0;background:transparent;border-radius:10px;padding:10px 6px;font-family:var(--display);font-weight:700;font-size:15px;cursor:pointer;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--gold);color:var(--gold-ink)}
+.resume{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;border-color:var(--gold)}
+.resume .big-btn{padding:10px 16px;font-size:16px}
+.seatbtns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.seat{flex-wrap:wrap}
+.tag.cpu{color:var(--ok)}
+.btns.three{grid-template-columns:1fr 1fr 1fr}
+.lastmove div+div{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+.big-btn[disabled]{opacity:.5;cursor:default}
 </style>
 </head>
 <body>
 <div id="app" class="wrap"></div>
 <script type="module">
-import { FIREBASE_CONFIG } from './firebase-config.js';
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { getDatabase, ref, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-
 const app = document.getElementById('app');
 const SUITS = ['S','H','D','C'], SYM = {S:'♠',H:'♥',D:'♦',C:'♣'};
 const RN = r => r === 1 ? 'A' : String(r);
@@ -267,7 +274,7 @@ const stoleText = piles => piles.map(x => `${x.cards.map(cardName).join(' ')} fr
 /* ---------- game flow ---------- */
 function startGame(cfg){
   G = { n:cfg.n, teams: cfg.n === 4 && cfg.teams, target: cfg.target, house: cfg.house !== false,
-    players: Array.from({length:cfg.n},(_,i)=>cfg.names[i]).map((nm,i)=>({ name:(nm||'').trim() || ('Player '+(i+1)), hand:[], pile:[] })),
+    players: Array.from({length:cfg.n},(_,i)=>cfg.names[i]).map((nm,i)=>({ name:(nm||'').trim() || ('Player '+(i+1)), bot:(cfg.bots && cfg.bots[i]) || null, hand:[], pile:[] })),
     handNo:0, starter: Math.floor(Math.random()*cfg.n) };
   G.scores = Array(nSides()).fill(0);
   dealHand();
@@ -276,7 +283,7 @@ function dealHand(){
   G.handNo++;
   const deck = []; for(const s of SUITS) for(let r=1;r<=10;r++) deck.push({id:s+r, r, s});
   shuffle(deck);
-  Object.assign(G, { deck, loose:[], builds:[], round:1, lastCapturer:null, lastMove:null, bseq:0, result:null, winner:null });
+  Object.assign(G, { deck, loose:[], builds:[], round:1, lastCapturer:null, lastMove:null, log:[], bseq:0, result:null, winner:null });
   G.players.forEach(p => { p.hand = []; p.pile = []; });
   dealRound(G.n === 3 ? 13 : 10);
   if(G.n === 3) G.loose.push(G.deck.pop());
@@ -287,9 +294,10 @@ function dealRound(k){
   G.players.forEach(p => p.hand.sort(byRank));
 }
 function clearSel(){ UI.card = null; UI.loose.clear(); UI.builds.clear(); UI.piles.clear(); UI.choice = null; }
-function say(text, type){ UI.msg = text; UI.msgType = type || ''; render(); }
+function say(text, type){ if(DRY){ DRY.err = text; return; } UI.msg = text; UI.msgType = type || ''; render(); }
 
 function finish(text){
+  if(DRY){ DRY.ok = true; return; }
   G.lastMove = { by:G.turn, text, round:G.round };
   clearSel(); UI.msg = '';
   if(G.players.every(p => !p.hand.length)){
@@ -298,7 +306,8 @@ function finish(text){
       G.lastMove.text += ' — first ten cards done. Ten more each have been dealt; the floor stays as it is.';
     } else endHand();
   } else { G.turn = (G.turn + 1) % G.n; G.phase = 'play'; }
-  pushMove();
+  G.log = (G.log || []).concat([G.lastMove]).slice(-12);
+  commitMove(); window.scrollTo(0,0);
 }
 
 function gather(){
@@ -448,8 +457,237 @@ function endHand(){
   G.phase = 'handEnd';
 }
 
+/* ---------- modes ---------- */
+let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
+let DRY = null, BOT = false;
+const LOCAL_KEY = 'kasino-local-v1';
+const LEVELS = { easy:'Easy', medium:'Medium', hard:'Hard' };
+const humanSeats = () => G.players.map((p,i) => p.bot ? -1 : i).filter(i => i >= 0);
+function viewSeat(){
+  if(!G) return -1;
+  if(MODE === 'online') return mySeat;
+  if(MODE === 'pass') return G.turn;
+  return humanSeats()[0] ?? -1;
+}
+function commitMove(){
+  if(DRY) return;
+  G.moveNo = (G.moveNo || 0) + 1;
+  if(MODE === 'online') return pushMove(BOT);
+  saveLocal(); render(); scheduleBots();
+}
+function saveLocal(){ try{ localStorage.setItem(LOCAL_KEY, JSON.stringify({ mode:MODE, G })); }catch(e){} }
+function loadLocal(){ try{ const d = JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null'); return d && d.G && d.mode ? d : null; }catch(e){ return null; } }
+function clearLocal(){ try{ localStorage.removeItem(LOCAL_KEY); }catch(e){} }
+
+/* ---------- computer player ---------- */
+// Rough worth of a card to whoever ends up with it: most cards (2 pts), spades, and the point cards.
+const W = c => 0.22 + (c.s === 'S' ? 0.12 : 0) + (c.r === 1 ? 1 : 0) + (c.r === 10 && c.s === 'D' ? 2 : 0) + (c.r === 2 && c.s === 'S' ? 1 : 0);
+const sumW = cards => cards.reduce((a,c) => a + W(c), 0);
+
+function applySel(m){
+  UI.card = m.c; UI.loose = new Set(m.loose || []); UI.builds = new Set(m.builds || []);
+  UI.piles = new Map(m.piles || []); UI.choice = null;
+}
+function runMove(m){ if(m.k === 'chow') doChow(); else if(m.k === 'build') doBuild(m.v); else doDrift(); }
+
+/* Play m on a copy of the table with the real rules. Returns the table after the move, or null if illegal. */
+function tryMove(m){
+  const realG = G, keep = { card:UI.card, loose:UI.loose, builds:UI.builds, piles:UI.piles, choice:UI.choice, msg:UI.msg, msgType:UI.msgType };
+  G = structuredClone(realG); DRY = { ok:false };
+  applySel(m);
+  try{ runMove(m); }catch(e){ DRY.ok = false; }
+  const after = DRY.ok ? G : null;
+  G = realG; DRY = null; Object.assign(UI, keep);
+  return after;
+}
+
+function subsetsUpTo(arr, k){
+  const out = [];
+  (function rec(i, cur){
+    if(cur.length) out.push(cur.slice());
+    if(cur.length === k) return;
+    for(let j=i;j<arr.length;j++){ cur.push(arr[j]); rec(j+1, cur); cur.pop(); }
+  })(0, []);
+  return out;
+}
+
+/* Keep adding blocks worth v from loose cards and rivals' piles, best-value block first. */
+function greedyBlocks(p, v, used){
+  used = new Set(used); const piles = new Map(), loose = [];
+  for(let guard=0; guard<12; guard++){
+    const avail = G.loose.filter(c => !used.has(c.id)).map(c => ({ c, pile:null }));
+    G.players.forEach((pl,i) => {
+      if(!stealable(p,i)) return;
+      const d = piles.get(i) || 0;
+      if(!G.house && d >= 1) return;
+      if(d < pl.pile.length) avail.push({ c: pl.pile[pl.pile.length-1-d], pile:i });
+    });
+    let best = null, bw = -1;
+    (function dfs(i, sum, set){
+      if(sum === v){ const w = sumW(set.map(x=>x.c)); if(w > bw){ bw = w; best = set.slice(); } return; }
+      if(set.length >= 4) return;
+      for(let j=i;j<avail.length;j++){ const s = sum + avail[j].c.r; if(s <= v){ set.push(avail[j]); dfs(j+1, s, set); set.pop(); } }
+    })(0, 0, []);
+    if(!best) break;
+    best.forEach(x => { if(x.pile === null){ used.add(x.c.id); loose.push(x.c.id); } else piles.set(x.pile, (piles.get(x.pile) || 0) + 1); });
+  }
+  return { loose, piles:[...piles] };
+}
+
+function candidates(p){
+  const P = G.players[p], out = [], seen = new Set(), L = G.loose;
+  const subs = subsetsUpTo(L, L.length > 12 ? 2 : 3);
+  const mineB = G.builds.filter(b => sameSide(b.owner, p)), oppB = G.builds.filter(b => !sameSide(b.owner, p));
+  for(const c of P.hand){
+    const key = c.r + '|' + (isPoint(c) ? c.id : '') + (c.s === 'S' ? 's' : '');
+    if(seen.has(key)) continue; seen.add(key);
+    const others = P.hand.filter(x => x !== c);
+    out.push({ k:'drift', c:c.id });
+    // chow
+    const bv = G.builds.filter(b => b.value === c.r);
+    if(G.house){
+      const singles = L.filter(x => x.r === c.r).map(x => x.id);
+      if(bv.length){
+        out.push({ k:'chow', c:c.id, loose:singles, builds:bv.map(b=>b.id) });
+        const ex = greedyBlocks(p, c.r, singles);
+        if(ex.loose.length || ex.piles.length) out.push({ k:'chow', c:c.id, loose:[...singles, ...ex.loose], builds:bv.map(b=>b.id), piles:ex.piles });
+      } else if(singles.length) out.push({ k:'chow', c:c.id, loose:singles });
+    } else {
+      const b = bestCapture(p, c.r);
+      if(b) out.push({ k:'chow', c:c.id, loose:b.loose.map(x=>x.id), builds:b.builds.map(x=>x.id), piles:b.piles.map(i=>[i,1]) });
+    }
+    // new builds
+    for(const S of subs){
+      const sum = c.r + S.reduce((a,x)=>a+x.r,0), mx = Math.max(c.r, ...S.map(x=>x.r));
+      for(let v=mx; v<=10 && v<=sum; v++){
+        if(sum % v || !others.some(x => x.r === v) || oppB.some(b => b.value === v)) continue;
+        out.push({ k:'build', c:c.id, loose:S.map(x=>x.id), v });
+      }
+    }
+    // add to a build my side owns
+    for(const B of mineB){
+      const v = B.value, bases = [];
+      if(c.r === v) bases.push([]);
+      else if(c.r < v) for(const S of subs) if(c.r + S.reduce((a,x)=>a+x.r,0) === v) bases.push(S.map(x=>x.id));
+      for(const base of bases.slice(0,6)){
+        out.push({ k:'build', c:c.id, builds:[B.id], loose:base });
+        const ex = greedyBlocks(p, v, base);
+        if(ex.loose.length || ex.piles.length) out.push({ k:'build', c:c.id, builds:[B.id], loose:[...base, ...ex.loose], piles:ex.piles });
+      }
+    }
+    // raise a rival's single build
+    for(const B of oppB) if(B.groups.length === 1 && B.value + c.r <= 10) out.push({ k:'build', c:c.id, builds:[B.id] });
+  }
+  return out;
+}
+
+/* How good a table is for seat p's side. Only uses what p could see. */
+function evalTable(S, p){
+  const ms = sideOf(p), opp = nSides() - 1, oppScale = (G.teams || G.n === 2) ? 1 : 0.5;
+  let score = 0;
+  S.players.forEach((pl,i) => { const v = sumW(pl.pile); score += sideOf(i) === ms ? v : -0.9 * v / opp; });
+  const hand = S.players[p].hand;
+  S.builds.forEach(b => {
+    const v = sumW(b.groups.flat());
+    if(sideOf(b.owner) === ms){
+      const hold = b.owner === p ? hand.filter(c => c.r === b.value).length : 1;
+      score += v * ((hold >= 2 ? 0.85 : 0.62) + (b.groups.length > 1 ? 0.05 : 0));
+    } else score -= v * 0.55 * oppScale;
+  });
+  S.loose.forEach(c => score -= W(c) * 0.12 + (isPoint(c) ? W(c) * 0.25 : 0));
+  if(S.builds.some(b => sideOf(b.owner) !== ms)){
+    const pl = S.players[p].pile; if(pl.length) score -= 0.25 * W(pl[pl.length-1]);
+  }
+  const cardsLeft = S.players.reduce((a,pl) => a + pl.hand.length, 0);
+  if(cardsLeft <= S.n && S.lastCapturer !== null && sideOf(S.lastCapturer) === ms) score += 0.5 * sumW(S.loose);
+  return score;
+}
+
+/* Hard: expected damage the next rival can do, guessing their hand from the cards p hasn't seen. */
+function threat(S, p){
+  const ms = sideOf(p);
+  let j = (p + 1) % S.n; while(sideOf(j) === ms && j !== p) j = (j + 1) % S.n;
+  const h = S.players[j].hand.length; if(!h || j === p) return 0;
+  const seen = new Set([...S.players[p].hand, ...S.loose, ...S.builds.flatMap(b=>b.groups.flat()), ...S.players.flatMap(pl=>pl.pile)].map(c=>c.id));
+  const unseen = Array(11).fill(0); let U = 0;
+  for(const s of SUITS) for(let r=1;r<=10;r++) if(!seen.has(s+r)){ unseen[r]++; U++; }
+  if(!U) return 0;
+  const prob = r => unseen[r] ? 1 - Math.pow(1 - unseen[r]/U, h) : 0;
+  const realG = G; G = S;
+  const gains = [];
+  for(let r=1;r<=10;r++){
+    const P = prob(r); if(!P) continue;
+    let g = 0;
+    const b = bestCapture(j, r);
+    if(b) g = sumW(b.loose) + sumW(b.builds.flatMap(x=>x.groups.flat())) + sumW(b.piles.map(i=>topOf(i)));
+    for(const B of S.builds) if(sideOf(B.owner) === ms && B.groups.length === 1 && B.value + r <= 10 && unseen[B.value + r])
+      g = Math.max(g, sumW(B.groups.flat()) * prob(B.value + r));
+    gains.push({ g, P });
+  }
+  G = realG;
+  gains.sort((a,b) => b.g - a.g);
+  let E = 0, rest = 1; for(const x of gains){ E += x.g * x.P * rest; rest *= 1 - x.P; }
+  return E;
+}
+
+function chooseMove(p, level){
+  const legal = [];
+  for(const m of candidates(p)){ const S = tryMove(m); if(S) legal.push({ m, S }); }
+  if(!legal.length) return null;
+  if(level === 'easy' && Math.random() < 0.3) return legal[Math.floor(Math.random()*legal.length)].m;
+  const noise = { easy:0.9, medium:0.25, hard:0.02 }[level] ?? 0.25;
+  let best = null, bs = -1e9;
+  for(const x of legal){
+    let s = evalTable(x.S, p);
+    if(level === 'hard') s -= 0.9 * threat(x.S, p);
+    s += (Math.random()*2 - 1) * noise;
+    if(s > bs){ bs = s; best = x.m; }
+  }
+  return best;
+}
+
+function botPlay(){
+  const p = G.turn, pl = G.players[p], before = pl.hand.length;
+  const m = chooseMove(p, pl.bot);
+  BOT = true;
+  try{
+    if(m){ applySel(m); runMove(m); }
+    if(G.turn === p && G.players[p].hand.length === before){
+      // Safety net: play anything legal
+      for(const c of G.players[p].hand){
+        for(const k of ['drift','chow']){
+          let mm = { k, c:c.id };
+          if(k === 'chow'){ const b = bestCapture(p, c.r); if(!b) continue; mm = { k, c:c.id, loose:b.loose.map(x=>x.id), builds:b.builds.map(x=>x.id), piles:b.piles.map(i=>[i,1]) }; }
+          if(tryMove(mm)){ applySel(mm); runMove(mm); break; }
+        }
+        if(G.players[p].hand.length !== before) break;
+      }
+    }
+  } finally { BOT = false; }
+}
+
+let botTimer = null, botKey = null;
+function scheduleBots(){
+  if(!G || G.phase !== 'play' || !G.players[G.turn].bot) return;
+  let delay = 700 + Math.random() * 500;
+  if(MODE === 'online'){
+    const rank = humanSeats().indexOf(mySeat);
+    if(rank < 0) return;
+    delay += rank * 2500;   // the first seated human runs the computers; others step in if they've gone
+  }
+  const keyNow = () => (MODE === 'online' ? UI.baseV : G.moveNo) + ':' + G.turn + ':' + MODE;
+  const key = keyNow();
+  if(key === botKey) return;
+  botKey = key; clearTimeout(botTimer);
+  botTimer = setTimeout(() => {
+    if(!G || G.phase !== 'play' || !G.players[G.turn].bot || keyNow() !== key) return;
+    botPlay();
+  }, delay);
+}
+
 /* ---------- online: Firebase ---------- */
 let db = null, uid = null, room = null, roomCode = null, unsub = null, mySeat = -1;
+let ref, onValue, runTransaction;
 const NET = { status:'connecting', error:'' };
 const LS = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const LSset = (k,v) => { try{ v == null ? localStorage.removeItem(k) : localStorage.setItem(k,v); }catch(e){} };
@@ -457,25 +695,32 @@ UI.myName = LS('kasino-name') || '';
 UI.joinCode = '';
 UI.homeMsg = '';
 UI.copied = false;
+UI.tab = LS('kasino-tab') || 'online';
+UI.setup.level = LS('kasino-level') || 'medium';
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const roomRef = code => ref(db, 'rooms/' + code);
 const txRoom = fn => runTransaction(roomRef(roomCode), cur => cur === null ? null : fn(cur));
 function homeMsg(t){ UI.homeMsg = t; render(); }
 
-function initNet(){
-  const ok = FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/PASTE/.test(FIREBASE_CONFIG.apiKey);
-  if(!ok){ NET.status = 'noconfig'; return render(); }
-  const fb = initializeApp(FIREBASE_CONFIG);
-  const auth = getAuth(fb); db = getDatabase(fb);
-  onAuthStateChanged(auth, u => {
-    if(!u || uid) return;
-    uid = u.uid; NET.status = 'ready';
-    const fromUrl = new URLSearchParams(location.search).get('room');
-    const code = (fromUrl || LS('kasino-room') || '').toUpperCase();
-    if(code && UI.myName.trim()) joinRoom(code);
-    else { UI.joinCode = code; render(); }
-  });
-  signInAnonymously(auth).catch(e => { NET.status = 'error'; NET.error = e.message; render(); });
+async function initNet(){
+  let cfg = null;
+  try{ cfg = (await import('./firebase-config.js?t=' + Date.now())).FIREBASE_CONFIG; }catch(e){}
+  if(!(cfg && cfg.apiKey && !/PASTE/.test(cfg.apiKey))){ NET.status = 'noconfig'; return render(); }
+  try{
+    const base = 'https://www.gstatic.com/firebasejs/10.12.2/';
+    const [A, Au, D] = await Promise.all([import(base+'firebase-app.js'), import(base+'firebase-auth.js'), import(base+'firebase-database.js')]);
+    ref = D.ref; onValue = D.onValue; runTransaction = D.runTransaction;
+    const fb = A.initializeApp(cfg), auth = Au.getAuth(fb); db = D.getDatabase(fb);
+    Au.onAuthStateChanged(auth, u => {
+      if(!u || uid) return;
+      uid = u.uid; NET.status = 'ready';
+      const fromUrl = new URLSearchParams(location.search).get('room');
+      const code = (fromUrl || LS('kasino-room') || '').toUpperCase();
+      if(code && UI.myName.trim() && MODE === null) joinRoom(code);
+      else { if(fromUrl){ UI.joinCode = code; UI.tab = 'online'; } render(); }
+    });
+    Au.signInAnonymously(auth).catch(e => { NET.status = 'error'; NET.error = e.message; render(); });
+  }catch(e){ NET.status = 'offline'; }
   render();
 }
 
@@ -519,6 +764,7 @@ async function joinRoom(code){
 
 function listen(code){
   if(unsub) unsub();
+  MODE = 'online'; G = null; UI.sheet = null;
   roomCode = code; LSset('kasino-room', code); UI.homeMsg = '';
   try{ history.replaceState(null, '', location.pathname + '?room=' + code); }catch(e){}
   unsub = onValue(roomRef(code), snap => {
@@ -529,6 +775,7 @@ function listen(code){
 }
 
 function onRoom(r){
+  if(MODE !== 'online') return;
   const wasMine = G && G.phase === 'play' && G.turn === mySeat;
   room = r; mySeat = -1;
   const seats = r.seats || {};
@@ -541,20 +788,22 @@ function onRoom(r){
     document.title = mine ? 'Your turn · Kasino' : 'Kasino Table';
   } else { G = null; UI.baseV = r.v; document.title = 'Kasino Table'; }
   render();
+  scheduleBots();
 }
 
-function pushMove(){
+function pushMove(quiet){
   const st = JSON.stringify(G), v = UI.baseV;
   render();
+  const undo = msg => { if(room && room.state) G = JSON.parse(room.state); if(!quiet) say(msg,'err'); else render(); };
   txRoom(cur => { if(cur.v !== v) return; cur.state = st; cur.v = v + 1; return cur; })
-    .then(res => { if(!res.committed){ if(room && room.state) G = JSON.parse(room.state); say('The table changed before your move landed. Try again.','err'); } })
-    .catch(e => { if(room && room.state) G = JSON.parse(room.state); say('Could not reach the table: ' + e.message,'err'); });
+    .then(res => { if(!res.committed) undo('The table changed before your move landed. Try again.'); })
+    .catch(e => undo('Could not reach the table: ' + e.message));
 }
 
 function dealGame(){
-  const r = room, names = [...Array(r.cfg.n).keys()].map(i => r.seats['s'+i].name);
-  startGame({ ...r.cfg, names });
-  pushMove();
+  const r = room, idx = [...Array(r.cfg.n).keys()];
+  startGame({ ...r.cfg, names: idx.map(i => r.seats['s'+i].name), bots: idx.map(i => r.seats['s'+i].bot || null) });
+  clearSel(); commitMove();
 }
 function moveSeat(i){
   txRoom(cur => {
@@ -566,15 +815,33 @@ function moveSeat(i){
     cur.seats = seats; return cur;
   });
 }
+function botSeat(i, action){
+  txRoom(cur => {
+    const seats = cur.seats || {};
+    if(cur.state) return;
+    const s = seats['s'+i];
+    if(action === 'add'){
+      if(s) return;
+      const n = Object.values(seats).filter(x => x.bot).length + 1;
+      seats['s'+i] = { bot: UI.setup.level, name: 'Computer ' + n };
+    } else if(action === 'level'){
+      if(!s || !s.bot) return;
+      const order = ['easy','medium','hard']; s.bot = order[(order.indexOf(s.bot) + 1) % 3];
+    } else if(action === 'remove'){
+      if(!s || !s.bot) return; delete seats['s'+i];
+    }
+    cur.seats = seats; return cur;
+  });
+}
 async function leaveRoom(){
   if(room && !room.state){
     try{
       await txRoom(cur => {
         const seats = cur.seats || {};
         for(const k in seats) if(seats[k].uid === uid) delete seats[k];
-        const left = Object.keys(seats);
-        if(!left.length) return null;
-        cur.seats = seats; if(cur.host === uid) cur.host = seats[left[0]].uid;
+        const people = Object.keys(seats).filter(k => !seats[k].bot);
+        if(!people.length) return null;
+        cur.seats = seats; if(cur.host === uid) cur.host = seats[people[0]].uid;
         return cur;
       });
     }catch(e){}
@@ -582,10 +849,31 @@ async function leaveRoom(){
   leaveLocal(); render();
 }
 function leaveLocal(){
-  if(unsub) unsub(); unsub = null; room = null; roomCode = null; G = null; mySeat = -1;
+  if(unsub) unsub(); unsub = null; room = null; roomCode = null; G = null; mySeat = -1; MODE = null;
   LSset('kasino-room', null);
   try{ history.replaceState(null, '', location.pathname); }catch(e){}
 }
+
+/* ---------- local games ---------- */
+function startLocal(mode){
+  const S = UI.setup, n = S.n;
+  let names, bots;
+  if(mode === 'pass'){ names = S.names.slice(0, n); bots = Array(n).fill(null); }
+  else {
+    names = [UI.myName.trim() || 'You', ...[...Array(n-1).keys()].map(i => 'Computer ' + (i+1))];
+    bots = [null, ...Array(n-1).fill(S.level)];
+  }
+  MODE = mode; UI.shown = null; UI.sheet = null;
+  startGame({ n, teams: n === 4 && S.teams, target:S.target, house: houseSetup(), names, bots });
+  clearSel(); UI.msg = '';
+  commitMove(); window.scrollTo(0,0);
+}
+function resumeLocal(){
+  const d = loadLocal(); if(!d) return;
+  MODE = d.mode; G = d.G; UI.shown = null; clearSel(); UI.msg = '';
+  render(); scheduleBots();
+}
+
 /* ---------- rendering ---------- */
 function cardBtn(c, act, extra = {}){
   const cls = ['card', isRed(c)?'red':'', isPoint(c)?'pt':'', extra.sel?'sel':'', extra.cls||''].join(' ');
@@ -619,7 +907,7 @@ function renderHandEnd(){
     ${done ? `<div class="hero"><div class="label">Game over</div><h1>${esc(sideName(G.winner))} ${G.teams?'win':'wins'}!</h1><p>First past ${G.target} points.</p></div>` : `<div><div class="label">Hand ${G.handNo} scored</div><h2 style="font-size:28px">Count up</h2></div>`}
     <p class="muted" style="margin:0">${sweep}</p>
     ${table}
-    ${done ? `<button class="big-btn" data-act="again">Play again, same table</button><button class="iconbtn" style="align-self:center" data-act="lobby">Back to the lobby</button>`
+    ${done ? `<button class="big-btn" data-act="again">Play again, same table</button>${MODE==='online' ? '<button class="iconbtn" style="align-self:center" data-act="lobby">Back to the lobby</button>' : '<button class="iconbtn" style="align-self:center" data-act="quit">Back to the start screen</button>'}`
            : `<button class="big-btn" data-act="next">Deal hand ${G.handNo+1}</button><p class="muted" style="margin:0">${esc(G.players[G.starter].name)} lost the hand, so plays first next.</p>`}
   </div>`;
 }
@@ -635,7 +923,7 @@ function renderSheet(){
         <li>4 players: 10 cards each. Partners sit opposite and share a score.</li>
         <li>The loser of each hand plays first in the next.</li></ul>
       ${(G ? G.house : room ? room.cfg.house : houseSetup()) ? `
-      <p><b>You're playing your house rules.</b> Choose Standard when you create a room for the published version.</p>
+      <p><b>You're playing your house rules.</b> Choose Standard on the start screen for the published version.</p>
       <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
         <li><b>Chow</b> (capture): a card takes loose cards of the same value, and any build of that value. Loose sets like 3+4 can't be chowed; build them first.</li>
         <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
@@ -665,53 +953,83 @@ function renderSheet(){
         <li>Razzer, the 10♦: 2 points</li>
         <li>Each ace: 1 point</li></ul>
       <p class="muted">Gold dots mark the point cards. First past the target score wins. Rules follow <a href="https://www.pagat.com/fishing/african_casino.html" target="_blank" rel="noopener">pagat.com's South African Casino</a>, with build details from the Khasino rules. House rules vary, so agree any changes before you deal.</p>
-      <button class="big-btn" data-act="closesheet">Back to the table</button></div></div>`);
+      <button class="big-btn" data-act="closesheet">${G ? 'Back to the table' : 'Close'}</button></div></div>`);
   } else if(UI.sheet === 'menu'){
     app.insertAdjacentHTML('beforeend', `<div class="sheetbg" data-act="closesheet"><div class="sheet" data-stop="1">
       <h2>Menu</h2>
       <button class="opt" data-act="again"><b>Restart with the same players</b><small>Scores go back to zero and a fresh hand is dealt</small></button>
-      <button class="opt" data-act="lobby"><b>Back to the lobby</b><small>End this game but keep the room and seats</small></button>
-      <button class="opt" data-act="leave"><b>Leave this room</b><small>You can rejoin later with the room code</small></button>
+      ${MODE === 'online' ? `<button class="opt" data-act="lobby"><b>Back to the lobby</b><small>End this game but keep the room and seats</small></button>
+      <button class="opt" data-act="leave"><b>Leave this room</b><small>You can rejoin later with the room code</small></button>` : `<button class="opt" data-act="quit"><b>Back to the start screen</b><small>This game is saved. Continue it from the start screen</small></button>`}
       <button class="iconbtn" data-act="closesheet">Keep playing</button></div></div>`);
   }
 }
-
 function header(){
   const chips = G.scores.map((sc,si) => `<div class="chip ${G.phase==='play' && sideOf(G.turn)===si ? 'now':''}"><span>${esc(sideName(si))}</span><b>${sc}</b></div>`).join('');
   const roundTxt = G.n === 2 ? ` · deal ${G.round} of 2` : '';
-  return `<div class="top"><div class="brand">Kasino<small>Room ${esc(roomCode)} · hand ${G.handNo}${roundTxt} · to ${G.target}</small></div>
+  const where = MODE === 'online' ? `Room ${esc(roomCode)}` : MODE === 'pass' ? 'One phone' : 'vs computer';
+  return `<div class="top"><div class="brand">Kasino<small>${where} · hand ${G.handNo}${roundTxt} · to ${G.target}</small></div>
     <div style="display:flex;gap:6px"><button class="iconbtn" data-act="rules">Rules</button><button class="iconbtn" data-act="menu">Menu</button></div></div>
     <div class="scores">${chips}</div>`;
 }
 const fanHtml = () => [{r:10,s:'D'},{r:2,s:'S'},{r:1,s:'H'},{r:7,s:'C'},{r:5,s:'D'}]
   .map((c,i)=>`<span style="--i:${i};--d:${Math.abs(i-2)*4}">${cardBtn(c,null)}</span>`).join('');
 
-function renderMsgScreen(title, body){
-  app.innerHTML = `<div class="cover"><div class="fan">${fanHtml()}</div><h2>${esc(title)}</h2>${body?`<p class="muted" style="max-width:44ch">${esc(body)}</p>`:''}</div>`;
+/* shared setup controls */
+const segPlayers = S => `<div class="field"><span class="label">Players</span><div class="seg">${[2,3,4].map(k=>`<button data-act="setn" data-v="${k}" aria-pressed="${S.n===k}">${k}</button>`).join('')}</div></div>`;
+const toggleTeams = (S, sub) => S.n===4 ? `<button class="toggle" data-act="teams" aria-pressed="${S.teams}"><span class="box2">${S.teams?'✓':''}</span><span><b>Play in partners</b><br><small class="muted">${sub}</small></span></button>` : '';
+const segRules = () => `<div class="field"><span class="label">Rules</span><div class="seg">
+    <button data-act="house" data-v="1" aria-pressed="${houseSetup()}">Our house rules</button>
+    <button data-act="house" data-v="0" aria-pressed="${!houseSetup()}">Standard</button></div></div>`;
+const segTarget = S => `<div class="field"><span class="label">Play to</span><div class="seg">${[11,21,31].map(k=>`<button data-act="target" data-v="${k}" aria-pressed="${S.target===k}">${k}</button>`).join('')}</div></div>`;
+const segLevel = S => `<div class="field"><span class="label">Computer strength</span><div class="seg">${Object.keys(LEVELS).map(k=>`<button data-act="level" data-v="${k}" aria-pressed="${S.level===k}">${LEVELS[k]}</button>`).join('')}</div></div>`;
+const nameField = () => `<div class="field"><span class="label">Your name</span><input type="text" id="myname" data-field="myName" maxlength="16" placeholder="e.g. Thandi" value="${esc(UI.myName)}"></div>`;
+
+function onlineTab(){
+  const S = UI.setup;
+  if(NET.status === 'noconfig') return `<section class="box"><h3>Online isn't set up on this copy</h3><p class="muted" style="margin:0">Paste your Firebase config into firebase-config.js to play across phones. One phone and vs computer work without it.</p></section>`;
+  if(NET.status === 'offline') return `<section class="box"><h3>Can't reach the online service</h3><p class="muted" style="margin:0">Check your connection and reload. You can still play on this phone.</p></section>`;
+  if(NET.status === 'error') return `<section class="box"><h3>Could not connect</h3><p class="muted" style="margin:0">${esc(NET.error)} Check that Anonymous sign-in is turned on in Firebase.</p></section>`;
+  const wait = NET.status !== 'ready';
+  return `${nameField()}
+    <section class="box"><h3>Join a room</h3>
+      <div class="joinrow"><input type="text" id="joincode" data-field="joinCode" maxlength="4" placeholder="CODE" value="${esc(UI.joinCode)}" autocapitalize="characters" autocomplete="off" aria-label="Room code"><button class="big-btn" data-act="join" ${wait?'disabled':''}>Join</button></div></section>
+    <section class="box"><h3>Or start a new room</h3>
+      ${segPlayers(S)}${toggleTeams(S,'Seats 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segRules()}${segTarget(S)}
+      <p class="muted" style="margin:0">Short of players? Fill empty seats with the computer in the lobby.</p>
+      <button class="big-btn" data-act="create" ${wait?'disabled':''}>${wait?'Connecting…':'Create room'}</button></section>`;
 }
-function renderNoConfig(){
-  app.innerHTML = `<div class="panel"><div class="hero"><div class="fan">${fanHtml()}</div><h1>Kasino</h1>
-    <p>Almost ready. This copy isn't connected to a Firebase project yet.</p></div>
-    <p>Open <b>firebase-config.js</b> in your repo and paste in the config from your Firebase project (Project settings → Your apps → Config). The README has the full steps.</p></div>`;
+function passTab(){
+  const S = UI.setup;
+  let names = '';
+  for(let i=0;i<S.n;i++) names += `<input type="text" id="name${i}" data-name="${i}" maxlength="16" placeholder="Player ${i+1}" value="${esc(S.names[i]||'')}" aria-label="Player ${i+1} name">`;
+  return `<section class="box"><h3>One phone, passed round</h3>
+    ${segPlayers(S)}
+    <div class="field"><span class="label">Names, in seating order</span><div class="names">${names}</div></div>
+    ${toggleTeams(S,'Players 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segRules()}${segTarget(S)}
+    <button class="big-btn" data-act="startpass">Shuffle and deal</button></section>`;
+}
+function cpuTab(){
+  const S = UI.setup;
+  return `${nameField()}<section class="box"><h3>You against the computer</h3>
+    ${segPlayers(S)}
+    <p class="muted" style="margin:0">${S.n===2?'You and one computer player.':S.n===3?'You and two computer players.':S.teams?'You and a computer partner against two computers.':'You and three computer players.'}</p>
+    ${toggleTeams(S,'You and the computer opposite you against the other two')}${segLevel(S)}${segRules()}${segTarget(S)}
+    <button class="big-btn" data-act="startcpu">Shuffle and deal</button></section>`;
 }
 
 function renderHome(){
-  const S = UI.setup;
+  const saved = loadLocal();
+  const resume = saved ? `<section class="box resume"><div><b>Game in progress</b><br><small class="muted">${saved.mode==='cpu'?'vs computer':'One phone'} · hand ${saved.G.handNo} · ${saved.G.players.map(p=>esc(p.name)).join(', ')}</small></div>
+    <div style="display:flex;gap:8px"><button class="big-btn" data-act="resume">Continue</button><button class="iconbtn" data-act="discard">Discard</button></div></section>` : '';
+  const tabs = [['online','Online'],['pass','One phone'],['cpu','vs Computer']];
+  const body = UI.tab === 'pass' ? passTab() : UI.tab === 'cpu' ? cpuTab() : onlineTab();
   app.innerHTML = `<div class="panel">
     <div class="hero"><div class="fan">${fanHtml()}</div><h1>Kasino</h1>
-    <p>South African Casino with the 40-card pack, played across everyone's phones.</p></div>
-    <div class="field"><span class="label">Your name</span><input type="text" id="myname" data-field="myName" maxlength="16" placeholder="e.g. Thandi" value="${esc(UI.myName)}"></div>
+    <p>South African Casino with the 40-card pack. Play friends on their own phones, pass one phone round, or take on the computer.</p></div>
+    ${resume}
+    <div class="tabs" role="tablist">${tabs.map(([k,l])=>`<button role="tab" data-act="tab" data-v="${k}" aria-selected="${UI.tab===k}">${l}</button>`).join('')}</div>
     ${UI.homeMsg ? `<div class="msg err" role="status">${esc(UI.homeMsg)}</div>` : ''}
-    <section class="box"><h3>Join a room</h3>
-      <div class="joinrow"><input type="text" id="joincode" data-field="joinCode" maxlength="4" placeholder="CODE" value="${esc(UI.joinCode)}" autocapitalize="characters" autocomplete="off" aria-label="Room code"><button class="big-btn" data-act="join">Join</button></div></section>
-    <section class="box"><h3>Or start a new room</h3>
-      <div class="field"><span class="label">Players</span><div class="seg">${[2,3,4].map(k=>`<button data-act="setn" data-v="${k}" aria-pressed="${S.n===k}">${k}</button>`).join('')}</div></div>
-      ${S.n===4 ? `<button class="toggle" data-act="teams" aria-pressed="${S.teams}"><span class="box2">${S.teams?'✓':''}</span><span><b>Play in partners</b><br><small class="muted">Seats 1 &amp; 3 against 2 &amp; 4, sharing a score</small></span></button>` : ''}
-      <div class="field"><span class="label">Rules</span><div class="seg">
-        <button data-act="house" data-v="1" aria-pressed="${houseSetup()}">Our house rules</button>
-        <button data-act="house" data-v="0" aria-pressed="${!houseSetup()}">Standard</button></div></div>
-      <div class="field"><span class="label">Play to</span><div class="seg">${[11,21,31].map(k=>`<button data-act="target" data-v="${k}" aria-pressed="${S.target===k}">${k}</button>`).join('')}</div></div>
-      <button class="big-btn" data-act="create">Create room</button></section>
+    ${body}
     <button class="iconbtn" style="align-self:center" data-act="rules">How to play</button>
   </div>`;
 }
@@ -723,15 +1041,24 @@ function renderLobby(){
   for(let i=0;i<n;i++){
     const s = seats['s'+i]; if(s) filled++;
     const team = r.cfg.teams ? `<span class="muted"> · Team ${i%2===0?'A':'B'}</span>` : '';
-    rows += `<div class="seat"><span class="sn">${i+1}</span><span class="sname">${s ? `<b>${esc(s.name)}</b>` : '<span class="muted">Empty seat</span>'}${s&&s.uid===uid?' <span class="tag">You</span>':''}${team}</span>
-      ${!s ? `<button class="iconbtn" data-act="seat" data-v="${i}">${mySeat>=0?'Move here':'Sit here'}</button>` : ''}</div>`;
+    let who = '<span class="muted">Empty seat</span>', btns = '';
+    if(s && s.bot){
+      who = `<b>${esc(s.name)}</b> <span class="tag">CPU</span>`;
+      if(mySeat >= 0) btns = `<button class="iconbtn" data-act="botlevel" data-v="${i}" title="Change strength">${LEVELS[s.bot]}</button><button class="iconbtn" data-act="botremove" data-v="${i}">Remove</button>`;
+      else btns = `<span class="muted">${LEVELS[s.bot]}</span>`;
+    } else if(s){
+      who = `<b>${esc(s.name)}</b>${s.uid===uid?' <span class="tag">You</span>':''}`;
+    } else {
+      btns = `<button class="iconbtn" data-act="seat" data-v="${i}">${mySeat>=0?'Move here':'Sit here'}</button>` + (mySeat>=0 ? `<button class="iconbtn" data-act="botadd" data-v="${i}">Add computer</button>` : '');
+    }
+    rows += `<div class="seat"><span class="sn">${i+1}</span><span class="sname">${who}${team}</span><span class="seatbtns">${btns}</span></div>`;
   }
   const full = filled === n;
   const summary = `${n} players · ${r.cfg.teams?'partners':'every player for themselves'} · ${r.cfg.house?'house rules':'standard rules'} · to ${r.cfg.target}`;
   const action = mySeat < 0
     ? `<p class="muted">${full ? 'This room is full.' : 'Pick a seat to join in.'}</p>`
     : full ? `<button class="big-btn" data-act="deal">Shuffle and deal</button>`
-           : `<p class="muted">Waiting for ${n-filled} more player${n-filled===1?'':'s'}. Send them the code or link.</p>`;
+           : `<p class="muted">Waiting for ${n-filled} more player${n-filled===1?'':'s'}. Send them the code or link, or fill a seat with the computer.</p>`;
   app.innerHTML = `<div class="panel">
     <div><div class="label">Room code</div><div class="code">${esc(roomCode)}</div><p class="muted" style="margin:4px 0 0">${summary}</p></div>
     <div class="field"><span class="label">Invite link</span><div class="joinrow"><input type="text" id="sharelink" readonly value="${esc(link)}" aria-label="Invite link"><button class="iconbtn" data-act="copy">${UI.copied?'Copied':'Copy'}</button></div></div>
@@ -741,11 +1068,30 @@ function renderLobby(){
   </div>`;
 }
 
+function recentMoves(V){
+  const log = G.log || [];
+  if(!log.length) return [];
+  let i = log.length - 1; while(i >= 0 && log[i].by !== V) i--;
+  const after = log.slice(i + 1);
+  return (after.length ? after : log.slice(-1)).slice(-3);
+}
+const movesHtml = list => list.length ? `<div class="lastmove">${list.map(m => `<div>${esc(m.text)}</div>`).join('')}</div>` : '';
+
+function renderCover(){
+  const p = G.players[G.turn];
+  const lm = G.log && G.log.length ? movesHtml(recentMoves(G.turn)) : `<p class="muted">${esc(p.name)} plays first this hand.${G.n===3?' One card has been dealt face up on the floor.':''}</p>`;
+  const backs = [0,1,2,3,4].map(i=>`<span class="back" style="--i:${i}"></span>`).join('');
+  app.innerHTML = header() + `<div class="cover"><div class="backs">${backs}</div>
+    <div><div class="label">Pass the phone to</div><h2>${esc(p.name)}</h2></div><div style="text-align:left;max-width:44ch">${lm}</div>
+    <button class="big-btn" data-act="reveal">I'm ${esc(p.name)}, show my cards</button></div>`;
+}
+
 function renderPlay(){
-  const me = mySeat, spect = me < 0, myTurn = !spect && G.turn === me;
-  const order = spect ? [...Array(G.n).keys()] : [...Array(G.n-1).keys()].map(k => (me+k+1) % G.n);
+  const V = viewSeat(), spect = V < 0, cur = G.players[G.turn];
+  const myTurn = !spect && G.turn === V && !cur.bot;
+  const order = spect ? [...Array(G.n).keys()] : [...Array(G.n-1).keys()].map(k => (V+k+1) % G.n);
   const opps = order.map(i => {
-    const p = G.players[i], t = topOf(i), can = myTurn && stealable(me,i), partner = !spect && G.teams && sameSide(me,i);
+    const p = G.players[i], t = topOf(i), can = myTurn && stealable(V,i), partner = !spect && G.teams && sameSide(V,i);
     let pileHtml = `<div class="empty"></div>`;
     if(t && !can) pileHtml = cardBtn(t,null);
     else if(t){
@@ -753,13 +1099,13 @@ function renderPlay(){
       const showN = Math.min(pl.length, G.house ? d + 1 : 1);
       pileHtml = `<div class="dig">${[...Array(showN).keys()].map(k => cardBtn(pl[pl.length-1-k],'pile',{id:`${i}:${k}`, sel:k<d, cls: UI.card ? 'steal':''})).join('')}</div>`;
     }
-    const tags = (partner?'<span class="tag">Partner</span> ':'') + (G.turn===i?'<span class="tag">Playing</span>':'');
+    const tags = (partner?'<span class="tag">Partner</span> ':'') + (p.bot?`<span class="tag cpu">CPU · ${LEVELS[p.bot]}</span> `:'') + (G.turn===i?'<span class="tag">Playing</span>':'');
     return `<div class="opp ${G.turn===i?'now':''}"><div class="who">${tags}<b>${esc(p.name)}</b><small>${p.hand.length} in hand</small></div>
       <div class="pile">${pileHtml}<small>${p.pile.length} chowed</small></div></div>`;
   }).join('');
   const loose = G.loose.map(c => cardBtn(c, myTurn?'loose':null, {sel:UI.loose.has(c.id)})).join('');
   const builds = G.builds.map(b => {
-    const owner = b.owner === me ? 'Your' : esc(G.players[b.owner].name) + "'s";
+    const owner = b.owner === V ? 'Your' : esc(G.players[b.owner].name) + "'s";
     const locked = b.groups.length > 1;
     const act = myTurn ? `data-act="build" data-id="${b.id}" aria-pressed="${UI.builds.has(b.id)}"` : 'disabled';
     return `<button class="build ${UI.builds.has(b.id)?'sel':''}" ${act}>
@@ -768,12 +1114,14 @@ function renderPlay(){
       <span class="meta">${owner} build · ${locked?'locked':'single, can be raised'}</span></span></button>`;
   }).join('');
   const floorEmpty = !G.loose.length && !G.builds.length;
-  const lm = G.lastMove ? `<div class="lastmove">${esc(G.lastMove.text)}</div>` : `<div class="lastmove">${esc(G.players[G.turn].name)} plays first this hand.</div>`;
+  const moves = recentMoves(V);
+  const lm = moves.length ? movesHtml(moves) : `<div class="lastmove">${esc(G.players[G.turn].name)} plays first this hand.</div>`;
   let mine = '', actions = '';
+  const waitTxt = cur.bot ? `${cur.name} is thinking…` : `Waiting for ${cur.name} to play.`;
   if(!spect){
-    const P = G.players[me], myTop = topOf(me);
+    const P = G.players[V], myTop = topOf(V);
     const sel = P.hand.find(c => c.id === UI.card);
-    const ownsBuild = G.builds.some(b => b.owner === me);
+    const ownsBuild = G.builds.some(b => b.owner === V);
     let hint = UI.msg;
     if(!hint && myTurn){
       if(!sel) hint = (ownsBuild && !G.house) ? 'Your turn. You own a build, so chow or add to a build this turn.' : 'Your turn. Pick a card from your hand.';
@@ -783,13 +1131,14 @@ function renderPlay(){
       <div class="pile">${myTop ? cardBtn(myTop,null) : '<div class="empty"></div>'}<small>${P.pile.length} chowed</small></div></div>
       <div class="hand">${P.hand.map(c => cardBtn(c, myTurn?'hand':null, {sel:UI.card===c.id, cls:'big'})).join('')}</div></section>`;
     actions = myTurn ? `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(hint)}</div>
-      <div class="btns">
+      <div class="btns ${MODE==='pass'?'':'three'}">
         <button class="btn primary" data-act="chow" ${sel?'':'disabled'}>Chow<small>capture</small></button>
         <button class="btn" data-act="buildbtn" ${sel?'':'disabled'}>Build<small>or add to</small></button>
         <button class="btn" data-act="drift" ${sel?'':'disabled'}>Drift<small>put down</small></button>
+        ${MODE==='pass' ? '<button class="btn ghost" data-act="hide" title="Hide my cards">Hide</button>' : ''}
       </div></div>`
-      : `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(UI.msg || `Waiting for ${G.players[G.turn].name} to play.`)}</div></div>`;
-  } else actions = `<div class="actions"><div class="msg">You're watching this game. ${esc(G.players[G.turn].name)} to play.</div></div>`;
+      : `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(UI.msg || waitTxt)}</div></div>`;
+  } else actions = `<div class="actions"><div class="msg">You're watching this game. ${esc(waitTxt)}</div></div>`;
   app.innerHTML = header() + `
     <div class="opps">${opps}</div>
     ${lm}
@@ -802,30 +1151,34 @@ function renderPlay(){
   if(UI.choice && myTurn) renderChoice();
 }
 
+const needCover = () => MODE === 'pass' && G.phase === 'play' && !G.players[G.turn].bot && UI.shown !== G.turn;
 function render(){
-  if(NET.status === 'noconfig') renderNoConfig();
-  else if(NET.status === 'error') renderMsgScreen('Could not connect', NET.error + ' Check the README, especially that Anonymous sign-in is turned on in Firebase.');
-  else if(NET.status === 'connecting') renderMsgScreen('Connecting…', '');
-  else if(!room) renderHome();
-  else if(!G) renderLobby();
-  else if(G.phase === 'play') renderPlay();
-  else renderHandEnd();
+  if(DRY) return;
+  if(MODE === 'online' && room){ if(!G) renderLobby(); else if(G.phase === 'play') renderPlay(); else renderHandEnd(); }
+  else if((MODE === 'pass' || MODE === 'cpu') && G){ if(G.phase !== 'play') renderHandEnd(); else if(needCover()) renderCover(); else renderPlay(); }
+  else { if(MODE !== 'online') MODE = null; renderHome(); }
   if(UI.sheet) renderSheet();
 }
 
 /* ---------- events ---------- */
-const myTurnNow = () => G && G.phase === 'play' && mySeat >= 0 && G.turn === mySeat;
+const myTurnNow = () => G && G.phase === 'play' && !G.players[G.turn].bot && viewSeat() === G.turn && !needCover();
 app.addEventListener('click', e => {
-  const t = e.target.closest('[data-act]'); if(!t) return;
+  const t = e.target.closest('[data-act]'); if(!t || t.disabled) return;
   if(t.classList.contains('sheetbg') && e.target.closest('[data-stop]')) return;
-  const a = t.dataset.act, id = t.dataset.id, v = +t.dataset.v;
+  const a = t.dataset.act, id = t.dataset.id, raw = t.dataset.v, v = +raw;
   const play = ['hand','loose','build','pile','clearfloor','chow','buildbtn','drift','choose'];
   if(play.includes(a) && !myTurnNow()) return;
   switch(a){
+    case 'tab': UI.tab = raw; UI.homeMsg = ''; LSset('kasino-tab', raw); break;
     case 'setn': UI.setup.n = v; break;
     case 'teams': UI.setup.teams = !UI.setup.teams; break;
     case 'target': UI.setup.target = v; break;
     case 'house': UI.setup.house = v === 1; break;
+    case 'level': UI.setup.level = raw; LSset('kasino-level', raw); break;
+    case 'startpass': return startLocal('pass');
+    case 'startcpu': return startLocal('cpu');
+    case 'resume': return resumeLocal();
+    case 'discard': clearLocal(); break;
     case 'create': return createRoom();
     case 'join': return joinRoom(UI.joinCode);
     case 'copy': {
@@ -835,11 +1188,21 @@ app.addEventListener('click', e => {
       return;
     }
     case 'seat': return moveSeat(v);
+    case 'botadd': return botSeat(v, 'add');
+    case 'botlevel': return botSeat(v, 'level');
+    case 'botremove': return botSeat(v, 'remove');
     case 'deal': return dealGame();
     case 'leave': UI.sheet = null; return leaveRoom();
     case 'lobby': UI.sheet = null; txRoom(cur => { cur.state = null; cur.v = (cur.v||0) + 1; return cur; }); return;
-    case 'again': { UI.sheet = null; startGame({ n:G.n, teams:G.teams, target:G.target, house:!!G.house, names:G.players.map(p=>p.name) }); clearSel(); return pushMove(); }
-    case 'next': dealHand(); clearSel(); return pushMove();
+    case 'quit': UI.sheet = null; MODE = null; G = null; clearSel(); window.scrollTo(0,0); break;
+    case 'again': {
+      UI.sheet = null; UI.shown = null;
+      startGame({ n:G.n, teams:G.teams, target:G.target, house:!!G.house, names:G.players.map(p=>p.name), bots:G.players.map(p=>p.bot||null) });
+      clearSel(); return commitMove();
+    }
+    case 'next': UI.shown = null; dealHand(); clearSel(); return commitMove();
+    case 'reveal': UI.shown = G.turn; clearSel(); UI.msg = ''; window.scrollTo(0,0); break;
+    case 'hide': UI.shown = null; clearSel(); UI.msg = ''; break;
     case 'hand': UI.card = UI.card === id ? null : id; UI.msg=''; break;
     case 'loose': UI.loose.has(id) ? UI.loose.delete(id) : UI.loose.add(id); UI.msg=''; break;
     case 'build': UI.builds.has(id) ? UI.builds.delete(id) : UI.builds.add(id); UI.msg=''; break;
@@ -858,6 +1221,8 @@ app.addEventListener('click', e => {
   render();
 });
 app.addEventListener('input', e => {
+  const n = e.target.dataset.name;
+  if(n !== undefined){ UI.setup.names[+n] = e.target.value; return; }
   const f = e.target.dataset.field; if(!f) return;
   let val = e.target.value;
   if(f === 'joinCode'){ val = val.toUpperCase().replace(/[^A-Z]/g,''); if(e.target.value !== val) e.target.value = val; }
@@ -866,6 +1231,7 @@ app.addEventListener('input', e => {
 });
 app.addEventListener('keydown', e => { if(e.key === 'Enter' && e.target.id === 'joincode') joinRoom(UI.joinCode); });
 
+render();
 initNet();
 
 </script>
