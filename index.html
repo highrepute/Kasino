@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b2a26">
+<title>Kasino Table</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%}
+[hidden]{display:none!important}
+
+/* Layout: one narrow column like a card table seen from your chair — opponents across the top, the floor in the middle, your hand and actions at the bottom. Single deliberate night-table look. */
+:root{
+  --felt:#103a35; --felt-deep:#0b2a26; --rail:#081e1b; --line:#24564e;
+  --ink:#eef1e8; --muted:#a3bcb3; --gold:#e8b54a; --gold-ink:#2a1d05;
+  --card:#fbf7ee; --card-ink:#1d2024; --red:#c13a2f; --err:#ffab9e; --ok:#9fe0b8;
+  --display:"Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body:"Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  color-scheme:dark;
+}
+html,body{background:var(--felt-deep);color:var(--ink)}
+body{font-family:var(--body);font-size:15px;line-height:1.45;margin:0}
+*{box-sizing:border-box}
+button{font:inherit;color:inherit}
+button:focus-visible,input:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.wrap{max-width:560px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 24px;display:flex;flex-direction:column;gap:14px;min-height:100%;background:radial-gradient(120% 70% at 50% 40%,var(--felt) 0%,var(--felt-deep) 100%)}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.label{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:700}
+.muted{color:var(--muted)}
+
+/* header */
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand{font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:-.02em}
+.brand small{font-family:var(--body);font-weight:400;font-size:12px;color:var(--muted);margin-left:6px;letter-spacing:0}
+.iconbtn{background:transparent;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.scores{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:flex;gap:8px;align-items:baseline;padding:5px 10px;border-radius:999px;background:var(--rail);border:1px solid var(--line);font-size:13px;min-width:0}
+.chip b{font-family:var(--display);font-size:16px;font-variant-numeric:tabular-nums}
+.chip.now{border-color:var(--gold)}
+.chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:14ch}
+
+/* cards */
+.card{--cw:48px;position:relative;width:var(--cw);height:calc(var(--cw)*1.4);border-radius:7px;background:var(--card);color:var(--card-ink);border:1px solid rgba(0,0,0,.3);box-shadow:0 2px 0 rgba(0,0,0,.35);font-family:var(--display);display:grid;place-items:center;padding:0;cursor:pointer;flex:none;transition:transform .12s ease}
+.card .cr{position:absolute;top:4px;left:5px;font-weight:800;font-size:calc(var(--cw)*.33);line-height:1}
+.card .cs{font-size:calc(var(--cw)*.52);line-height:1;margin-top:calc(var(--cw)*.18)}
+.card.red{color:var(--red)}
+.card.pt::after{content:"";position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+.card.sel{transform:translateY(-7px);outline:3px solid var(--gold);outline-offset:1px}
+.card[disabled]{cursor:default}
+.card.big{--cw:54px}
+.mini{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:36px;padding:0 4px;border-radius:5px;background:var(--card);color:var(--card-ink);font-family:var(--display);font-weight:700;font-size:13px;border:1px solid rgba(0,0,0,.3)}
+.mini.red{color:var(--red)}
+.back{--cw:30px;width:var(--cw);height:calc(var(--cw)*1.4);border-radius:5px;background:repeating-linear-gradient(45deg,#7a2a23 0 4px,#8f3329 4px 8px);border:2px solid var(--card)}
+
+/* opponents */
+.opps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.opp{background:var(--rail);border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;gap:10px;align-items:center;min-width:0}
+.opp .who{min-width:0;flex:1}
+.opp .who b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opp .who small{color:var(--muted);font-size:12px}
+.tag{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);font-weight:700}
+.pile{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pile .card{--cw:38px}
+.pile small{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.pile .empty{width:38px;height:53px;border:1px dashed var(--line);border-radius:7px}
+.pile .dig{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;max-width:130px}
+.pile .card.steal{box-shadow:0 0 0 2px var(--gold),0 2px 0 rgba(0,0,0,.35)}
+
+/* floor */
+.floor{border:1px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px;background:rgba(0,0,0,.12)}
+.floorhead{display:flex;justify-content:space-between;align-items:baseline}
+.loose{display:flex;flex-wrap:wrap;gap:8px;min-height:20px}
+.builds{display:flex;flex-direction:column;gap:8px}
+.build{display:flex;align-items:center;gap:12px;text-align:left;background:var(--felt-deep);border:1px solid var(--line);border-radius:12px;padding:8px 10px;cursor:pointer}
+.build.sel{outline:3px solid var(--gold);outline-offset:1px}
+.build .val{font-family:var(--display);font-weight:800;font-size:28px;min-width:34px;text-align:center;color:var(--gold);font-variant-numeric:tabular-nums}
+.build .groups{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.build .grp{display:flex;gap:3px;padding:3px;border-radius:7px;background:rgba(255,255,255,.06)}
+.build .meta{font-size:12px;color:var(--muted)}
+.emptyfloor{color:var(--muted);font-size:14px}
+
+.lastmove{font-size:14px;background:var(--rail);border-left:3px solid var(--gold);padding:8px 12px;border-radius:0 8px 8px 0}
+
+/* me */
+.me{display:flex;flex-direction:column;gap:10px}
+.mehead{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
+.mehead .pile{flex-direction:row;gap:8px}
+.hand{display:flex;flex-wrap:wrap;gap:8px;padding-top:8px}
+
+.actions{position:sticky;bottom:0;margin-left:calc(-1*max(16px,env(safe-area-inset-left,0px)));margin-right:calc(-1*max(16px,env(safe-area-inset-right,0px)));padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));background:var(--rail);border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;z-index:5}
+.msg{font-size:14px;min-height:20px}
+.msg.err{color:var(--err)} .msg.info{color:var(--ok)}
+.btns{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px}
+.btn{border:0;border-radius:12px;padding:10px 8px;font-family:var(--display);font-weight:700;font-size:16px;cursor:pointer;background:var(--felt);border:1px solid var(--line);display:flex;flex-direction:column;align-items:center;line-height:1.1}
+.btn small{font-family:var(--body);font-weight:400;font-size:11px;color:var(--muted);margin-top:2px}
+.btn.primary{background:var(--gold);color:var(--gold-ink);border-color:var(--gold)}
+.btn.primary small{color:#5a4210}
+.btn[disabled]{opacity:.4;cursor:default}
+.btn.ghost{background:transparent}
+
+/* full-screen panels */
+.panel{display:flex;flex-direction:column;gap:16px;padding-top:8px}
+.cover{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:18px;padding-block:40px}
+.cover h2{font-size:34px;line-height:1.1}
+.cover .backs{display:flex}
+.cover .backs .back{margin-left:-14px;transform:rotate(calc((var(--i) - 2) * 6deg))}
+.big-btn{border:0;border-radius:14px;padding:14px 22px;font-family:var(--display);font-weight:800;font-size:18px;background:var(--gold);color:var(--gold-ink);cursor:pointer}
+.field{display:flex;flex-direction:column;gap:6px}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{flex:1;min-width:56px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--rail);cursor:pointer;font-family:var(--display);font-weight:700;font-size:16px}
+.seg button[aria-pressed="true"]{background:var(--gold);color:var(--gold-ink);border-color:var(--gold)}
+input[type=text]{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--rail);color:var(--ink);font:inherit}
+.names{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.toggle{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--rail);cursor:pointer;text-align:left}
+.toggle .box2{width:22px;height:22px;border-radius:6px;border:2px solid var(--muted);flex:none;display:grid;place-items:center}
+.toggle[aria-pressed="true"] .box2{background:var(--gold);border-color:var(--gold);color:var(--gold-ink)}
+.hero h1{font-size:40px;line-height:1;font-weight:800}
+.hero p{margin:8px 0 0;color:var(--muted);max-width:52ch}
+.fan{display:flex;gap:0;margin:14px 0 4px}
+.fan .card{--cw:44px;margin-right:-12px;transform:rotate(calc((var(--i) - 2) * 7deg)) translateY(calc(var(--d) * 1px));cursor:default}
+
+table.score{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto}
+table.score th,table.score td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:right}
+table.score th:first-child,table.score td:first-child{text-align:left;color:var(--muted)}
+table.score thead th{font-family:var(--display);color:var(--ink)}
+table.score tr.total td{font-family:var(--display);font-weight:800;font-size:18px;color:var(--gold)}
+
+.sheetbg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--felt-deep);border:1px solid var(--line);border-radius:18px 18px 0 0;width:100%;max-width:560px;max-height:88%;overflow:auto;padding:18px max(16px,env(safe-area-inset-right,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:12px}
+.sheet h2{font-size:22px}
+.sheet h3{font-size:16px;margin-top:6px;color:var(--gold)}
+.sheet p,.sheet li{max-width:62ch;margin:0}
+.sheet ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px}
+.opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--rail);cursor:pointer;text-align:left}
+.opt b{font-family:var(--display);font-size:17px}
+.opt small{color:var(--muted)}
+a{color:var(--gold)}
+@media (prefers-reduced-motion:reduce){.card{transition:none}}
+
+.box{border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:12px;background:rgba(0,0,0,.12)}
+.box h3{font-size:17px}
+.joinrow{display:flex;gap:8px;align-items:stretch}
+.joinrow input{flex:1;min-width:0}
+#joincode{font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.2em;text-transform:uppercase}
+.code{font-family:var(--display);font-weight:800;font-size:56px;letter-spacing:.14em;line-height:1;color:var(--gold)}
+.seats{display:flex;flex-direction:column;gap:6px}
+.seat{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--rail)}
+.seat .sn{font-family:var(--display);font-weight:800;color:var(--muted);width:18px}
+.seat .sname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.opp.now{border-color:var(--gold)}
+.cover .fan{justify-content:center}
+.msg.err{color:var(--err)}
+
+</style>
+</head>
+<body>
+<div id="app" class="wrap"></div>
+<script type="module">
+import { FIREBASE_CONFIG } from './firebase-config.js';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getDatabase, ref, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+
+const app = document.getElementById('app');
+const SUITS = ['S','H','D','C'], SYM = {S:'♠',H:'♥',D:'♦',C:'♣'};
+const RN = r => r === 1 ? 'A' : String(r);
+const cardName = c => RN(c.r) + SYM[c.s];
+const isRed = c => c.s === 'H' || c.s === 'D';
+const isPoint = c => c.r === 1 || (c.r === 2 && c.s === 'S') || (c.r === 10 && c.s === 'D');
+const byRank = (a,b) => a.r - b.r || SUITS.indexOf(a.s) - SUITS.indexOf(b.s);
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+let G = null;
+const UI = { card:null, loose:new Set(), builds:new Set(), piles:new Map(), msg:'', msgType:'', choice:null, sheet:null, baseV:null,
+  setup:{ n:2, names:['','','',''], teams:true, target:21, house:true } };
+const houseSetup = () => UI.setup.house !== false;
+/* ---------- helpers ---------- */
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+const sideOf = p => G.teams ? p % 2 : p;
+const nSides = () => G.teams ? 2 : G.n;
+const sameSide = (a,b) => sideOf(a) === sideOf(b);
+const sideName = si => G.teams ? G.players.filter((_,i)=>i%2===si).map(p=>p.name).join(' & ') : G.players[si].name;
+const topOf = i => { const pl = G.players[i].pile; return pl[pl.length-1]; };
+const stealable = (p,i) => i !== p && !sameSide(p,i) && G.players[i].pile.length > 0;
+function save(){}
+
+/* Split items into groups that each total v. Returns array of groups or null. */
+function partition(items, v){
+  const n = items.length; if(!n) return [];
+  const vals = items.map(x => x.r); const tot = vals.reduce((a,b)=>a+b,0);
+  if(tot % v || Math.max(...vals) > v) return null;
+  const order = [...Array(n).keys()].sort((a,b)=>vals[b]-vals[a]);
+  const used = Array(n).fill(false), gid = Array(n).fill(-1); let g = -1;
+  function rec(sum, start, left){
+    if(sum === v){ sum = 0; start = 0; }
+    if(left === 0) return sum === 0;
+    if(sum === 0){
+      let k = 0; while(used[order[k]]) k++;
+      const i = order[k]; used[i] = true; g++; gid[i] = g;
+      if(rec(vals[i], k+1, left-1)) return true;
+      used[i] = false; g--; return false;
+    }
+    let prev = -1;
+    for(let k=start;k<n;k++){
+      const i = order[k];
+      if(used[i] || vals[i] === prev || sum + vals[i] > v) continue;
+      prev = vals[i]; used[i] = true; gid[i] = g;
+      if(rec(sum + vals[i], k+1, left-1)) return true;
+      used[i] = false;
+    }
+    return false;
+  }
+  if(!rec(0,0,n)) return null;
+  const groups = []; for(let i=0;i<n;i++) (groups[gid[i]] = groups[gid[i]] || []).push(items[i]);
+  return groups;
+}
+
+/* Largest legal capture for a card of value v */
+function bestCapture(p, v){
+  const builds = G.builds.filter(b => b.value === v);
+  if(G.house && !builds.length){
+    const singles = G.loose.filter(c => c.r === v);
+    return singles.length ? { loose:singles, piles:[], builds:[] } : null;
+  }
+  const piles = G.players.map((_,i)=>i).filter(i => stealable(p,i));
+  const items = [...G.loose.map(c=>({c, pile:null})), ...piles.map(i=>({c:topOf(i), pile:i}))].slice(0,30);
+  const subs = [];
+  (function dfs(i, sum, mask, k){
+    if(sum === v){ subs.push({m:mask, k}); return; }
+    for(let j=i;j<items.length;j++){ const s = sum + items[j].c.r; if(s <= v) dfs(j+1, s, mask | (1<<j), k+1); }
+  })(0,0,0,0);
+  let best = 0, bestSet = [], iter = 0;
+  (function go(i, mask, count, chosen){
+    if(count > best){ best = count; bestSet = chosen.slice(); }
+    if(++iter > 40000) return;
+    for(let j=i;j<subs.length;j++){ if(subs[j].m & mask) continue; chosen.push(j); go(j+1, mask|subs[j].m, count+subs[j].k, chosen); chosen.pop(); }
+  })(0,0,0,[]);
+  let mask = 0; bestSet.forEach(j => mask |= subs[j].m);
+  const picked = items.filter((_,j) => mask & (1<<j));
+  if(!picked.length && !builds.length) return null;
+  return { loose: picked.filter(x=>x.pile===null).map(x=>x.c), piles: picked.filter(x=>x.pile!==null).map(x=>x.pile), builds };
+}
+
+/* After a move: does player p still hold a card for every build they own? Returns owed value or 0 */
+function owed(p, hand, builds){ for(const b of builds) if(b.owner === p && !hand.some(x => x.r === b.value)) return b.value; return 0; }
+
+/* Put a chow onto player p's pile (array is bottom → top).
+   House: capture-value cards on top, then aces, the razzer (10♦), the 2♠, then the rest in build order.
+   Standard: lowest card on top. */
+const POINT_ORDER = c => c.r === 1 ? 0 : (c.r === 10 && c.s === 'D') ? 1 : 2;
+function stack(p, cards, v){
+  const pile = G.players[p].pile;
+  if(!G.house){ cards.slice().sort((a,b)=>b.r-a.r).forEach(c => pile.push(c)); return; }
+  const val = cards.filter(c => c.r === v);
+  const pts = cards.filter(c => c.r !== v && isPoint(c)).sort((a,b)=>POINT_ORDER(a)-POINT_ORDER(b));
+  const rest = cards.filter(c => c.r !== v && !isPoint(c));
+  // rest[0] is the bottom of the build, so it goes deepest; val[0] (the capturing card) ends up on top
+  [...rest, ...pts.reverse(), ...val.reverse()].forEach(c => pile.push(c));
+}
+function takeFromPiles(piles){ piles.forEach(x => G.players[x.i].pile.splice(-x.d)); }
+const stoleText = piles => piles.map(x => `${x.cards.map(cardName).join(' ')} from ${G.players[x.i].name}`).join(' and ');
+
+/* ---------- game flow ---------- */
+function startGame(cfg){
+  G = { n:cfg.n, teams: cfg.n === 4 && cfg.teams, target: cfg.target, house: cfg.house !== false,
+    players: Array.from({length:cfg.n},(_,i)=>cfg.names[i]).map((nm,i)=>({ name:(nm||'').trim() || ('Player '+(i+1)), hand:[], pile:[] })),
+    handNo:0, starter: Math.floor(Math.random()*cfg.n) };
+  G.scores = Array(nSides()).fill(0);
+  dealHand();
+}
+function dealHand(){
+  G.handNo++;
+  const deck = []; for(const s of SUITS) for(let r=1;r<=10;r++) deck.push({id:s+r, r, s});
+  shuffle(deck);
+  Object.assign(G, { deck, loose:[], builds:[], round:1, lastCapturer:null, lastMove:null, bseq:0, result:null, winner:null });
+  G.players.forEach(p => { p.hand = []; p.pile = []; });
+  dealRound(G.n === 3 ? 13 : 10);
+  if(G.n === 3) G.loose.push(G.deck.pop());
+  G.turn = G.starter; G.phase = 'play';
+}
+function dealRound(k){
+  for(let j=0;j<k;j++) for(let i=0;i<G.n;i++) G.players[(G.starter+i)%G.n].hand.push(G.deck.pop());
+  G.players.forEach(p => p.hand.sort(byRank));
+}
+function clearSel(){ UI.card = null; UI.loose.clear(); UI.builds.clear(); UI.piles.clear(); UI.choice = null; }
+function say(text, type){ UI.msg = text; UI.msgType = type || ''; render(); }
+
+function finish(text){
+  G.lastMove = { by:G.turn, text, round:G.round };
+  clearSel(); UI.msg = '';
+  if(G.players.every(p => !p.hand.length)){
+    if(G.n === 2 && G.round === 1){
+      G.round = 2; dealRound(10); G.turn = G.starter; G.phase = 'play';
+      G.lastMove.text += ' — first ten cards done. Ten more each have been dealt; the floor stays as it is.';
+    } else endHand();
+  } else { G.turn = (G.turn + 1) % G.n; G.phase = 'play'; }
+  pushMove();
+}
+
+function gather(){
+  const me = G.players[G.turn];
+  return { me, c: me.hand.find(x => x.id === UI.card),
+    loose: G.loose.filter(x => UI.loose.has(x.id)),
+    builds: G.builds.filter(b => UI.builds.has(b.id)),
+    piles: [...UI.piles].filter(([i,d]) => d > 0 && stealable(G.turn, i))
+      .map(([i,d]) => ({ i, d, cards: G.players[i].pile.slice(-d).reverse() })) };
+}
+
+function doChow(){
+  const s = gather(); if(!s.c) return say('Pick a card from your hand first.','err');
+  const v = s.c.r;
+  if(!s.loose.length && !s.builds.length && !s.piles.length){
+    const b = bestCapture(G.turn, v);
+    if(!b) return say(`Nothing on the floor adds up to ${RN(v)}. Try Build or Drift.`,'err');
+    UI.loose = new Set(b.loose.map(x=>x.id)); UI.builds = new Set(b.builds.map(x=>x.id)); UI.piles = new Map(b.piles.map(i=>[i,1]));
+    const more = G.house && b.builds.length ? ' You can also dig deeper into piles before you take it.' : '';
+    return say(`Picked everything your ${cardName(s.c)} can chow. Tap Chow again to take it.${more}`,'info');
+  }
+  const wrong = s.builds.find(b => b.value !== v);
+  if(wrong) return say(`That build is worth ${wrong.value}. You need a ${RN(wrong.value)} to chow it.`,'err');
+  const pileCards = s.piles.flatMap(x => x.cards);
+  const items = [...s.loose, ...pileCards];
+  if(G.house && !s.builds.length){
+    if(s.piles.length) return say("You can only steal from piles when there's a build involved.",'err');
+    const bad = s.loose.find(x => x.r !== v);
+    if(bad) return say(`Without a build, your ${cardName(s.c)} can only chow loose ${RN(v)}s. To take a set like that, build it first.`,'err');
+  } else {
+    if(!G.house && s.piles.some(x => x.d > 1)) return say('Only the top card of a pile can be taken.','err');
+    if(items.length && !partition(items, v)) return say(`The cards you picked don't split into sets that each add up to ${v}.`,'err');
+  }
+  const hand2 = s.me.hand.filter(x => x !== s.c);
+  const rest = G.builds.filter(b => !s.builds.includes(b));
+  const o = owed(G.turn, hand2, rest); if(o) return say(`That would leave you nothing to chow your build of ${o}.`,'err');
+  s.me.hand = hand2;
+  G.loose = G.loose.filter(x => !s.loose.includes(x)); G.builds = rest;
+  takeFromPiles(s.piles);
+  const taken = [...s.builds.flatMap(b => b.groups.flat()), ...s.loose, ...pileCards];
+  stack(G.turn, [s.c, ...taken], v);
+  G.lastCapturer = G.turn;
+  const stole = s.piles.length ? `, stealing ${stoleText(s.piles)}` : '';
+  const floorTaken = taken.filter(c => !pileCards.includes(c));
+  finish(`${s.me.name} chowed with ${cardName(s.c)} and took ${floorTaken.map(cardName).join(' ') || 'nothing from the floor'}${stole}.`);
+}
+
+function doBuild(choiceV){
+  const s = gather(); if(!s.c) return say('Pick a card from your hand first.','err');
+  const me = G.turn, hand2 = s.me.hand.filter(x => x !== s.c);
+  const pileCards = s.piles.flatMap(x => x.cards);
+  if(!G.house && s.piles.some(x => x.d > 1)) return say('Only the top card of a pile can be taken.','err');
+  const oppBuildOf = v => G.builds.find(b => b.value === v && !sameSide(b.owner, me));
+  const ownBuildOf = v => G.builds.find(b => b.value === v && sameSide(b.owner, me));
+  if(s.builds.length > 1) return say('Build onto one build at a time.','err');
+
+  if(s.builds.length === 1){
+    const B = s.builds[0];
+    if(sameSide(B.owner, me)){
+      const v = B.value; const groups = partition([s.c, ...s.loose, ...pileCards], v);
+      if(!groups) return say(`To add to the build of ${v}, your card plus the cards you pick must make sets of ${v}.`,'err');
+      const o = owed(me, hand2, G.builds); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
+      s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x)); takeFromPiles(s.piles);
+      B.groups.push(...groups);
+      const stole = s.piles.length ? `, stealing ${stoleText(s.piles)}` : '';
+      return finish(`${s.me.name} added ${[s.c, ...s.loose].map(cardName).join(' ')} to the build of ${v}${stole}. It's now locked.`);
+    }
+    if(s.loose.length || s.piles.length) return say("You can change someone else's build only by adding one card from your hand. Unpick the other cards.",'err');
+    if(B.groups.length > 1) return say(`That build of ${B.value} is locked. You can only chow it.`,'err');
+    const v = B.value + s.c.r;
+    if(v > 10) return say(`That would make ${v}. Builds can't go above 10.`,'err');
+    if(!hand2.some(x => x.r === v)) return say(`You'd need another ${RN(v)} in your hand to make it ${v}.`,'err');
+    const ob = oppBuildOf(v); if(ob && ob !== B) return say(`There's already someone else's build of ${v} on the floor.`,'err');
+    const mine = ownBuildOf(v);
+    const after = G.builds.filter(b => b !== B && b !== mine).concat([{owner:me, value:v}]);
+    const o = owed(me, hand2, after); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
+    const prevOwner = G.players[B.owner].name;
+    s.me.hand = hand2; B.groups[0].push(s.c);
+    if(mine){ mine.groups.push(B.groups[0]); G.builds = G.builds.filter(b => b !== B); }
+    else { B.value = v; B.owner = me; }
+    return finish(`${s.me.name} added ${cardName(s.c)} to ${prevOwner}'s build, making it ${v}. It's now ${s.me.name}'s.`);
+  }
+
+  if(s.piles.length) return say("Cards from other players' piles can only go onto a build you already own.",'err');
+  if(!s.loose.length) return say('Pick the floor cards you want to build with. To just put your card down, use Drift.','err');
+  const items = [s.c, ...s.loose];
+  const cands = [];
+  for(let v=1; v<=10; v++){
+    if(!hand2.some(x => x.r === v) || oppBuildOf(v)) continue;
+    const g = partition(items, v); if(g) cands.push({v, groups:g});
+  }
+  if(!cands.length){
+    const sum = items.reduce((a,x)=>a+x.r,0);
+    if(sum > 10) return say(`Those add up to ${sum}. Builds can't go above 10.`,'err');
+    if(oppBuildOf(sum)) return say(`There's already someone else's build of ${sum}. Only one build of each value is allowed.`,'err');
+    return say(`That makes ${sum}, but you don't hold another ${RN(sum)} to chow it with later.`,'err');
+  }
+  const pick = choiceV ? cands.find(x => x.v === choiceV) : (cands.length === 1 ? cands[0] : null);
+  if(!pick){ UI.choice = cands; return render(); }
+  const v = pick.v, mine = ownBuildOf(v);
+  const after = G.builds.filter(b => b !== mine).concat([{owner: mine ? mine.owner : me, value:v}]);
+  const o = owed(me, hand2, after); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
+  s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x));
+  if(mine){ mine.groups.push(...pick.groups); }
+  else G.builds.push({ id:'b'+(++G.bseq), value:v, owner:me, groups:pick.groups });
+  UI.choice = null;
+  const kind = (mine || pick.groups.length > 1) ? 'locked' : 'single';
+  finish(`${s.me.name} built ${v} with ${items.map(cardName).join(' ')} (${kind}).`);
+}
+
+function doDrift(){
+  const s = gather(); if(!s.c) return say('Pick a card from your hand first.','err');
+  if(s.loose.length || s.builds.length || s.piles.length) return say('Drift puts your card down on its own. Unpick the floor cards, or use Chow or Build.','err');
+  const ownsBuild = G.builds.some(b => b.owner === G.turn);
+  if(!G.house && ownsBuild && !(G.n === 2 && G.round === 2)) return say("You own a build, so you can't drift. Chow something or add to a build.",'err');
+  const hand2 = s.me.hand.filter(x => x !== s.c);
+  const o = owed(G.turn, hand2, G.builds); if(o) return say(`That's your last ${RN(o)}. You need it to chow your build of ${o}.`,'err');
+  s.me.hand = hand2; G.loose.push(s.c);
+  finish(`${s.me.name} drifted ${cardName(s.c)} onto the floor.`);
+}
+
+function endHand(){
+  let swept = 0;
+  if(G.lastCapturer !== null){
+    const rest = [...G.loose, ...G.builds.flatMap(b => b.groups.flat())];
+    rest.forEach(c => G.players[G.lastCapturer].pile.push(c)); swept = rest.length;
+  }
+  G.loose = []; G.builds = [];
+  const rows = [...Array(nSides())].map((_,si) => {
+    const cards = G.players.filter((_,i) => sideOf(i) === si).flatMap(p => p.pile);
+    return { si, cards:cards.length, spades:cards.filter(c=>c.s==='S').length,
+      spy: cards.some(c=>c.s==='S'&&c.r===2), mummy: cards.some(c=>c.s==='D'&&c.r===10), aces: cards.filter(c=>c.r===1).length };
+  });
+  const mx = Math.max(...rows.map(r=>r.cards)), lead = rows.filter(r=>r.cards===mx).length;
+  rows.forEach(r => {
+    r.mostPts = r.cards === mx ? (lead === 1 ? 2 : 1) : 0;
+    r.spadePts = r.spades >= 5 ? 1 : 0;
+    r.pts = r.mostPts + r.spadePts + (r.spy?1:0) + (r.mummy?2:0) + r.aces;
+    G.scores[r.si] += r.pts;
+  });
+  G.result = { rows, swept, sweeper: G.lastCapturer };
+  const best = Math.max(...G.scores), leaders = G.scores.filter(x => x === best).length;
+  G.winner = best >= G.target && leaders === 1 ? G.scores.indexOf(best) : null;
+  const minP = Math.min(...rows.map(r=>r.pts)), loser = rows.find(r=>r.pts===minP).si;
+  const seats = [...Array(G.n).keys()].filter(i => sideOf(i) === loser);
+  G.starter = seats.find(i => i !== G.starter) ?? seats[0];
+  G.phase = 'handEnd';
+}
+
+/* ---------- online: Firebase ---------- */
+let db = null, uid = null, room = null, roomCode = null, unsub = null, mySeat = -1;
+const NET = { status:'connecting', error:'' };
+const LS = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
+const LSset = (k,v) => { try{ v == null ? localStorage.removeItem(k) : localStorage.setItem(k,v); }catch(e){} };
+UI.myName = LS('kasino-name') || '';
+UI.joinCode = '';
+UI.homeMsg = '';
+UI.copied = false;
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const roomRef = code => ref(db, 'rooms/' + code);
+const txRoom = fn => runTransaction(roomRef(roomCode), cur => cur === null ? null : fn(cur));
+function homeMsg(t){ UI.homeMsg = t; render(); }
+
+function initNet(){
+  const ok = FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/PASTE/.test(FIREBASE_CONFIG.apiKey);
+  if(!ok){ NET.status = 'noconfig'; return render(); }
+  const fb = initializeApp(FIREBASE_CONFIG);
+  const auth = getAuth(fb); db = getDatabase(fb);
+  onAuthStateChanged(auth, u => {
+    if(!u || uid) return;
+    uid = u.uid; NET.status = 'ready';
+    const fromUrl = new URLSearchParams(location.search).get('room');
+    const code = (fromUrl || LS('kasino-room') || '').toUpperCase();
+    if(code && UI.myName.trim()) joinRoom(code);
+    else { UI.joinCode = code; render(); }
+  });
+  signInAnonymously(auth).catch(e => { NET.status = 'error'; NET.error = e.message; render(); });
+  render();
+}
+
+async function createRoom(){
+  const name = UI.myName.trim(); if(!name) return homeMsg('Enter your name first.');
+  const S = UI.setup;
+  for(let tries=0; tries<6; tries++){
+    const code = [...Array(4)].map(() => CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)]).join('');
+    try{
+      const res = await runTransaction(roomRef(code), cur => {
+        if(cur) return;
+        return { v:1, host:uid, created:Date.now(),
+          cfg:{ n:S.n, teams: S.n === 4 && S.teams, target:S.target, house: houseSetup() },
+          seats:{ s0:{ uid, name } }, state:null };
+      });
+      if(res.committed) return listen(code);
+    }catch(e){ return homeMsg('Could not create a room: ' + e.message); }
+  }
+  homeMsg('Could not create a room. Try again.');
+}
+
+async function joinRoom(code){
+  code = (code || '').trim().toUpperCase();
+  if(code.length !== 4) return homeMsg('Room codes are 4 letters.');
+  const name = UI.myName.trim(); if(!name){ UI.joinCode = code; return homeMsg('Enter your name first.'); }
+  let res;
+  try{
+    res = await runTransaction(roomRef(code), cur => {
+      if(cur === null) return null;
+      const seats = cur.seats || {};
+      const mine = Object.keys(seats).find(k => seats[k].uid === uid);
+      if(mine){ if(cur.state) return; seats[mine].name = name; cur.seats = seats; return cur; }
+      if(cur.state) return;
+      for(let i=0; i<cur.cfg.n; i++) if(!seats['s'+i]){ seats['s'+i] = { uid, name }; cur.seats = seats; return cur; }
+      return;
+    });
+  }catch(e){ return homeMsg('Could not join: ' + e.message); }
+  if(!res.snapshot.exists()){ LSset('kasino-room', null); UI.joinCode = code; return homeMsg(`There's no room ${code}. Check the code with whoever made it.`); }
+  listen(code);
+}
+
+function listen(code){
+  if(unsub) unsub();
+  roomCode = code; LSset('kasino-room', code); UI.homeMsg = '';
+  try{ history.replaceState(null, '', location.pathname + '?room=' + code); }catch(e){}
+  unsub = onValue(roomRef(code), snap => {
+    const r = snap.val();
+    if(!r){ leaveLocal(); return homeMsg('That room has closed.'); }
+    onRoom(r);
+  });
+}
+
+function onRoom(r){
+  const wasMine = G && G.phase === 'play' && G.turn === mySeat;
+  room = r; mySeat = -1;
+  const seats = r.seats || {};
+  for(let i=0; i<r.cfg.n; i++) if(seats['s'+i] && seats['s'+i].uid === uid) mySeat = i;
+  if(r.state){
+    if(UI.baseV !== r.v){ clearSel(); UI.msg = ''; }
+    G = JSON.parse(r.state); UI.baseV = r.v;
+    const mine = G.phase === 'play' && G.turn === mySeat;
+    if(mine && !wasMine){ try{ navigator.vibrate && navigator.vibrate(120); }catch(e){} }
+    document.title = mine ? 'Your turn · Kasino' : 'Kasino Table';
+  } else { G = null; UI.baseV = r.v; document.title = 'Kasino Table'; }
+  render();
+}
+
+function pushMove(){
+  const st = JSON.stringify(G), v = UI.baseV;
+  render();
+  txRoom(cur => { if(cur.v !== v) return; cur.state = st; cur.v = v + 1; return cur; })
+    .then(res => { if(!res.committed){ if(room && room.state) G = JSON.parse(room.state); say('The table changed before your move landed. Try again.','err'); } })
+    .catch(e => { if(room && room.state) G = JSON.parse(room.state); say('Could not reach the table: ' + e.message,'err'); });
+}
+
+function dealGame(){
+  const r = room, names = [...Array(r.cfg.n).keys()].map(i => r.seats['s'+i].name);
+  startGame({ ...r.cfg, names });
+  pushMove();
+}
+function moveSeat(i){
+  txRoom(cur => {
+    const seats = cur.seats || {};
+    if(cur.state || seats['s'+i]) return;
+    const mine = Object.keys(seats).find(k => seats[k].uid === uid);
+    seats['s'+i] = mine ? seats[mine] : { uid, name: UI.myName.trim() || 'Player' };
+    if(mine) delete seats[mine];
+    cur.seats = seats; return cur;
+  });
+}
+async function leaveRoom(){
+  if(room && !room.state){
+    try{
+      await txRoom(cur => {
+        const seats = cur.seats || {};
+        for(const k in seats) if(seats[k].uid === uid) delete seats[k];
+        const left = Object.keys(seats);
+        if(!left.length) return null;
+        cur.seats = seats; if(cur.host === uid) cur.host = seats[left[0]].uid;
+        return cur;
+      });
+    }catch(e){}
+  }
+  leaveLocal(); render();
+}
+function leaveLocal(){
+  if(unsub) unsub(); unsub = null; room = null; roomCode = null; G = null; mySeat = -1;
+  LSset('kasino-room', null);
+  try{ history.replaceState(null, '', location.pathname); }catch(e){}
+}
+/* ---------- rendering ---------- */
+function cardBtn(c, act, extra = {}){
+  const cls = ['card', isRed(c)?'red':'', isPoint(c)?'pt':'', extra.sel?'sel':'', extra.cls||''].join(' ');
+  const attrs = act ? `data-act="${act}" data-id="${extra.id ?? c.id}" aria-pressed="${!!extra.sel}"` : 'disabled';
+  return `<button class="${cls}" ${attrs} aria-label="${RN(c.r)} of ${({S:'spades',H:'hearts',D:'diamonds',C:'clubs'})[c.s]}"><span class="cr">${RN(c.r)}</span><span class="cs">${SYM[c.s]}</span></button>`;
+}
+const mini = c => `<span class="mini ${isRed(c)?'red':''}">${RN(c.r)}${SYM[c.s]}</span>`;
+
+function renderChoice(){
+  const opts = UI.choice.map(c => `<button class="opt" data-act="choose" data-v="${c.v}"><b>Build ${c.v}</b><small>${c.groups.map(g=>g.map(cardName).join(' + ')).join('  ·  ')} — ${c.groups.length>1?'locked set':'single build, others can raise it'}</small></button>`).join('');
+  app.insertAdjacentHTML('beforeend', `<div class="sheetbg" data-act="closechoice"><div class="sheet" data-stop="1"><h2>What are you building?</h2><p class="muted">Those cards work more than one way.</p>${opts}<button class="iconbtn" data-act="closechoice">Cancel</button></div></div>`);
+}
+
+function renderHandEnd(){
+  const R = G.result;
+  const cols = R.rows.map(r => `<th>${esc(sideName(r.si))}</th>`).join('');
+  const row = (label, f) => `<tr><td>${label}</td>${R.rows.map(r=>`<td>${f(r)}</td>`).join('')}</tr>`;
+  const pts = (n, p) => p ? `${n} <b style="color:var(--gold)">+${p}</b>` : `${n}`;
+  const table = `<div class="tablewrap"><table class="score"><thead><tr><th></th>${cols}</tr></thead><tbody>
+    ${row('Cards (most: 2)', r => pts(r.cards, r.mostPts))}
+    ${row('Spades (5+: 1)', r => pts(r.spades, r.spadePts))}
+    ${row('Spy two 2♠', r => r.spy ? '<b style="color:var(--gold)">+1</b>' : '–')}
+    ${row('Razzer 10♦', r => r.mummy ? '<b style="color:var(--gold)">+2</b>' : '–')}
+    ${row('Aces (1 each)', r => pts(r.aces, r.aces))}
+    <tr class="total"><td>This hand</td>${R.rows.map(r=>`<td>${r.pts}</td>`).join('')}</tr>
+    <tr class="total"><td>Game</td>${R.rows.map(r=>`<td>${G.scores[r.si]}</td>`).join('')}</tr>
+    </tbody></table></div>`;
+  const sweep = R.sweeper !== null && R.swept ? `${esc(G.players[R.sweeper].name)} made the last chow and took the ${R.swept} card${R.swept===1?'':'s'} left on the floor.` : 'Nothing was left on the floor.';
+  const done = G.winner !== null;
+  app.innerHTML = header() + `<div class="panel">
+    ${done ? `<div class="hero"><div class="label">Game over</div><h1>${esc(sideName(G.winner))} ${G.teams?'win':'wins'}!</h1><p>First past ${G.target} points.</p></div>` : `<div><div class="label">Hand ${G.handNo} scored</div><h2 style="font-size:28px">Count up</h2></div>`}
+    <p class="muted" style="margin:0">${sweep}</p>
+    ${table}
+    ${done ? `<button class="big-btn" data-act="again">Play again, same table</button><button class="iconbtn" style="align-self:center" data-act="lobby">Back to the lobby</button>`
+           : `<button class="big-btn" data-act="next">Deal hand ${G.handNo+1}</button><p class="muted" style="margin:0">${esc(G.players[G.starter].name)} lost the hand, so plays first next.</p>`}
+  </div>`;
+}
+
+function renderSheet(){
+  if(UI.sheet === 'rules'){
+    app.insertAdjacentHTML('beforeend', `<div class="sheetbg" data-act="closesheet"><div class="sheet" data-stop="1">
+      <h2>How to play Kasino</h2>
+      <p>The South African version of Casino uses a 40-card pack: ace to 10 in each suit, no picture cards. Aces count as 1.</p>
+      <h3>Dealing</h3><ul>
+        <li>2 players: 10 cards each. When they run out, 10 more each. The floor carries over.</li>
+        <li>3 players: 13 cards each, and one card face up on the floor.</li>
+        <li>4 players: 10 cards each. Partners sit opposite and share a score.</li>
+        <li>The loser of each hand plays first in the next.</li></ul>
+      ${(G ? G.house : room ? room.cfg.house : houseSetup()) ? `
+      <p><b>You're playing your house rules.</b> Choose Standard when you create a room for the published version.</p>
+      <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
+        <li><b>Chow</b> (capture): a card takes loose cards of the same value, and any build of that value. Loose sets like 3+4 can't be chowed; build them first.</li>
+        <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
+        <li><b>Drift</b>: put your card down on its own. You can drift even while you own a build, but never your last card of that build's value.</li></ul>
+      <h3>Builds and stealing</h3><ul>
+        <li>A build with one block, like 5+3, can be raised by a rival adding one card from their hand, if they hold the new total. It then belongs to them. Once a second block goes on, it's locked and can only be chowed.</li>
+        <li>To add to a build you own, play one card from your hand into a block (on its own if it matches). Then keep adding blocks from any mix of floor cards and rivals' piles, digging as far down a pile as the cards add up.</li>
+        <li>When you chow a build, you can take extra blocks of that value from floor cards and rivals' piles in the same move.</li>
+        <li>Stealing only works with a build already on the floor. You can't steal into a brand-new build, or when chowing a loose card, and you can never chow straight off a pile.</li>
+        <li>Only one build of each value can be on the floor.</li></ul>
+      <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>` : `
+      <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
+        <li><b>Chow</b> (capture): take floor cards that match your card, sets of loose cards that add up to it, any build of that value, and the top card of a rival's pile when it fits. Several sets at once is fine.</li>
+        <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
+        <li><b>Drift</b>: put your card down on its own.</li></ul>
+      <h3>Builds</h3><ul>
+        <li>A <b>single</b> build (one set, like 5+3) can be raised by a rival adding one card from their hand, if they hold the new total. It then belongs to them.</li>
+        <li>Adding another set of the same value, or stacking a matching card on top, makes it <b>locked</b>. Locked builds can only be chowed.</li>
+        <li>When you add to your own build, you may steal the top card of a rival's pile into it, as long as a card from your hand goes in too.</li>
+        <li>Only one build of each value can be on the floor.</li>
+        <li>While you own a build you can't drift (except in the second deal of a 2-player game), and you can't play away your last card of that value.</li></ul>
+      <h3>Piles</h3><p>Chowed cards go face up on your pile, lowest card on top. That top card is open to rivals. Whoever chows last in the hand takes everything left on the floor.</p>`}
+      <h3>Scoring each hand</h3><ul>
+        <li>Most cards: 2 points (a tie gives 1 each)</li>
+        <li>At least five spades: 1 point</li>
+        <li>Spy two, the 2♠: 1 point</li>
+        <li>Razzer, the 10♦: 2 points</li>
+        <li>Each ace: 1 point</li></ul>
+      <p class="muted">Gold dots mark the point cards. First past the target score wins. Rules follow <a href="https://www.pagat.com/fishing/african_casino.html" target="_blank" rel="noopener">pagat.com's South African Casino</a>, with build details from the Khasino rules. House rules vary, so agree any changes before you deal.</p>
+      <button class="big-btn" data-act="closesheet">Back to the table</button></div></div>`);
+  } else if(UI.sheet === 'menu'){
+    app.insertAdjacentHTML('beforeend', `<div class="sheetbg" data-act="closesheet"><div class="sheet" data-stop="1">
+      <h2>Menu</h2>
+      <button class="opt" data-act="again"><b>Restart with the same players</b><small>Scores go back to zero and a fresh hand is dealt</small></button>
+      <button class="opt" data-act="lobby"><b>Back to the lobby</b><small>End this game but keep the room and seats</small></button>
+      <button class="opt" data-act="leave"><b>Leave this room</b><small>You can rejoin later with the room code</small></button>
+      <button class="iconbtn" data-act="closesheet">Keep playing</button></div></div>`);
+  }
+}
+
+function header(){
+  const chips = G.scores.map((sc,si) => `<div class="chip ${G.phase==='play' && sideOf(G.turn)===si ? 'now':''}"><span>${esc(sideName(si))}</span><b>${sc}</b></div>`).join('');
+  const roundTxt = G.n === 2 ? ` · deal ${G.round} of 2` : '';
+  return `<div class="top"><div class="brand">Kasino<small>Room ${esc(roomCode)} · hand ${G.handNo}${roundTxt} · to ${G.target}</small></div>
+    <div style="display:flex;gap:6px"><button class="iconbtn" data-act="rules">Rules</button><button class="iconbtn" data-act="menu">Menu</button></div></div>
+    <div class="scores">${chips}</div>`;
+}
+const fanHtml = () => [{r:10,s:'D'},{r:2,s:'S'},{r:1,s:'H'},{r:7,s:'C'},{r:5,s:'D'}]
+  .map((c,i)=>`<span style="--i:${i};--d:${Math.abs(i-2)*4}">${cardBtn(c,null)}</span>`).join('');
+
+function renderMsgScreen(title, body){
+  app.innerHTML = `<div class="cover"><div class="fan">${fanHtml()}</div><h2>${esc(title)}</h2>${body?`<p class="muted" style="max-width:44ch">${esc(body)}</p>`:''}</div>`;
+}
+function renderNoConfig(){
+  app.innerHTML = `<div class="panel"><div class="hero"><div class="fan">${fanHtml()}</div><h1>Kasino</h1>
+    <p>Almost ready. This copy isn't connected to a Firebase project yet.</p></div>
+    <p>Open <b>firebase-config.js</b> in your repo and paste in the config from your Firebase project (Project settings → Your apps → Config). The README has the full steps.</p></div>`;
+}
+
+function renderHome(){
+  const S = UI.setup;
+  app.innerHTML = `<div class="panel">
+    <div class="hero"><div class="fan">${fanHtml()}</div><h1>Kasino</h1>
+    <p>South African Casino with the 40-card pack, played across everyone's phones.</p></div>
+    <div class="field"><span class="label">Your name</span><input type="text" id="myname" data-field="myName" maxlength="16" placeholder="e.g. Thandi" value="${esc(UI.myName)}"></div>
+    ${UI.homeMsg ? `<div class="msg err" role="status">${esc(UI.homeMsg)}</div>` : ''}
+    <section class="box"><h3>Join a room</h3>
+      <div class="joinrow"><input type="text" id="joincode" data-field="joinCode" maxlength="4" placeholder="CODE" value="${esc(UI.joinCode)}" autocapitalize="characters" autocomplete="off" aria-label="Room code"><button class="big-btn" data-act="join">Join</button></div></section>
+    <section class="box"><h3>Or start a new room</h3>
+      <div class="field"><span class="label">Players</span><div class="seg">${[2,3,4].map(k=>`<button data-act="setn" data-v="${k}" aria-pressed="${S.n===k}">${k}</button>`).join('')}</div></div>
+      ${S.n===4 ? `<button class="toggle" data-act="teams" aria-pressed="${S.teams}"><span class="box2">${S.teams?'✓':''}</span><span><b>Play in partners</b><br><small class="muted">Seats 1 &amp; 3 against 2 &amp; 4, sharing a score</small></span></button>` : ''}
+      <div class="field"><span class="label">Rules</span><div class="seg">
+        <button data-act="house" data-v="1" aria-pressed="${houseSetup()}">Our house rules</button>
+        <button data-act="house" data-v="0" aria-pressed="${!houseSetup()}">Standard</button></div></div>
+      <div class="field"><span class="label">Play to</span><div class="seg">${[11,21,31].map(k=>`<button data-act="target" data-v="${k}" aria-pressed="${S.target===k}">${k}</button>`).join('')}</div></div>
+      <button class="big-btn" data-act="create">Create room</button></section>
+    <button class="iconbtn" style="align-self:center" data-act="rules">How to play</button>
+  </div>`;
+}
+
+function renderLobby(){
+  const r = room, n = r.cfg.n, seats = r.seats || {};
+  const link = location.origin + location.pathname + '?room=' + roomCode;
+  let filled = 0, rows = '';
+  for(let i=0;i<n;i++){
+    const s = seats['s'+i]; if(s) filled++;
+    const team = r.cfg.teams ? `<span class="muted"> · Team ${i%2===0?'A':'B'}</span>` : '';
+    rows += `<div class="seat"><span class="sn">${i+1}</span><span class="sname">${s ? `<b>${esc(s.name)}</b>` : '<span class="muted">Empty seat</span>'}${s&&s.uid===uid?' <span class="tag">You</span>':''}${team}</span>
+      ${!s ? `<button class="iconbtn" data-act="seat" data-v="${i}">${mySeat>=0?'Move here':'Sit here'}</button>` : ''}</div>`;
+  }
+  const full = filled === n;
+  const summary = `${n} players · ${r.cfg.teams?'partners':'every player for themselves'} · ${r.cfg.house?'house rules':'standard rules'} · to ${r.cfg.target}`;
+  const action = mySeat < 0
+    ? `<p class="muted">${full ? 'This room is full.' : 'Pick a seat to join in.'}</p>`
+    : full ? `<button class="big-btn" data-act="deal">Shuffle and deal</button>`
+           : `<p class="muted">Waiting for ${n-filled} more player${n-filled===1?'':'s'}. Send them the code or link.</p>`;
+  app.innerHTML = `<div class="panel">
+    <div><div class="label">Room code</div><div class="code">${esc(roomCode)}</div><p class="muted" style="margin:4px 0 0">${summary}</p></div>
+    <div class="field"><span class="label">Invite link</span><div class="joinrow"><input type="text" id="sharelink" readonly value="${esc(link)}" aria-label="Invite link"><button class="iconbtn" data-act="copy">${UI.copied?'Copied':'Copy'}</button></div></div>
+    <div class="field"><span class="label">Seats, in playing order</span><div class="seats">${rows}</div></div>
+    ${action}
+    <div style="display:flex;gap:8px;justify-content:center"><button class="iconbtn" data-act="rules">Rules</button><button class="iconbtn" data-act="leave">Leave room</button></div>
+  </div>`;
+}
+
+function renderPlay(){
+  const me = mySeat, spect = me < 0, myTurn = !spect && G.turn === me;
+  const order = spect ? [...Array(G.n).keys()] : [...Array(G.n-1).keys()].map(k => (me+k+1) % G.n);
+  const opps = order.map(i => {
+    const p = G.players[i], t = topOf(i), can = myTurn && stealable(me,i), partner = !spect && G.teams && sameSide(me,i);
+    let pileHtml = `<div class="empty"></div>`;
+    if(t && !can) pileHtml = cardBtn(t,null);
+    else if(t){
+      const d = UI.piles.get(i) || 0, pl = p.pile;
+      const showN = Math.min(pl.length, G.house ? d + 1 : 1);
+      pileHtml = `<div class="dig">${[...Array(showN).keys()].map(k => cardBtn(pl[pl.length-1-k],'pile',{id:`${i}:${k}`, sel:k<d, cls: UI.card ? 'steal':''})).join('')}</div>`;
+    }
+    const tags = (partner?'<span class="tag">Partner</span> ':'') + (G.turn===i?'<span class="tag">Playing</span>':'');
+    return `<div class="opp ${G.turn===i?'now':''}"><div class="who">${tags}<b>${esc(p.name)}</b><small>${p.hand.length} in hand</small></div>
+      <div class="pile">${pileHtml}<small>${p.pile.length} chowed</small></div></div>`;
+  }).join('');
+  const loose = G.loose.map(c => cardBtn(c, myTurn?'loose':null, {sel:UI.loose.has(c.id)})).join('');
+  const builds = G.builds.map(b => {
+    const owner = b.owner === me ? 'Your' : esc(G.players[b.owner].name) + "'s";
+    const locked = b.groups.length > 1;
+    const act = myTurn ? `data-act="build" data-id="${b.id}" aria-pressed="${UI.builds.has(b.id)}"` : 'disabled';
+    return `<button class="build ${UI.builds.has(b.id)?'sel':''}" ${act}>
+      <span class="val">${b.value}</span><span style="display:flex;flex-direction:column;gap:4px;min-width:0">
+      <span class="groups">${b.groups.map(g=>`<span class="grp">${g.map(mini).join('')}</span>`).join('')}</span>
+      <span class="meta">${owner} build · ${locked?'locked':'single, can be raised'}</span></span></button>`;
+  }).join('');
+  const floorEmpty = !G.loose.length && !G.builds.length;
+  const lm = G.lastMove ? `<div class="lastmove">${esc(G.lastMove.text)}</div>` : `<div class="lastmove">${esc(G.players[G.turn].name)} plays first this hand.</div>`;
+  let mine = '', actions = '';
+  if(!spect){
+    const P = G.players[me], myTop = topOf(me);
+    const sel = P.hand.find(c => c.id === UI.card);
+    const ownsBuild = G.builds.some(b => b.owner === me);
+    let hint = UI.msg;
+    if(!hint && myTurn){
+      if(!sel) hint = (ownsBuild && !G.house) ? 'Your turn. You own a build, so chow or add to a build this turn.' : 'Your turn. Pick a card from your hand.';
+      else hint = `Tap floor cards to use with your ${cardName(sel)}. Chow with nothing picked selects everything it can take.`;
+    }
+    mine = `<section class="me"><div class="mehead"><div><div class="label">Your hand</div><b style="font-family:var(--display);font-size:18px">${esc(P.name)}</b></div>
+      <div class="pile">${myTop ? cardBtn(myTop,null) : '<div class="empty"></div>'}<small>${P.pile.length} chowed</small></div></div>
+      <div class="hand">${P.hand.map(c => cardBtn(c, myTurn?'hand':null, {sel:UI.card===c.id, cls:'big'})).join('')}</div></section>`;
+    actions = myTurn ? `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(hint)}</div>
+      <div class="btns">
+        <button class="btn primary" data-act="chow" ${sel?'':'disabled'}>Chow<small>capture</small></button>
+        <button class="btn" data-act="buildbtn" ${sel?'':'disabled'}>Build<small>or add to</small></button>
+        <button class="btn" data-act="drift" ${sel?'':'disabled'}>Drift<small>put down</small></button>
+      </div></div>`
+      : `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(UI.msg || `Waiting for ${G.players[G.turn].name} to play.`)}</div></div>`;
+  } else actions = `<div class="actions"><div class="msg">You're watching this game. ${esc(G.players[G.turn].name)} to play.</div></div>`;
+  app.innerHTML = header() + `
+    <div class="opps">${opps}</div>
+    ${lm}
+    <section class="floor"><div class="floorhead"><span class="label">The floor</span>${myTurn && (UI.loose.size||UI.builds.size||UI.piles.size)?`<button class="iconbtn" data-act="clearfloor">Unpick all</button>`:''}</div>
+      ${floorEmpty ? `<div class="emptyfloor">The floor is empty.</div>` : ''}
+      ${G.builds.length ? `<div class="builds">${builds}</div>` : ''}
+      ${G.loose.length ? `<div class="loose">${loose}</div>` : ''}
+    </section>
+    ${mine}${actions}`;
+  if(UI.choice && myTurn) renderChoice();
+}
+
+function render(){
+  if(NET.status === 'noconfig') renderNoConfig();
+  else if(NET.status === 'error') renderMsgScreen('Could not connect', NET.error + ' Check the README, especially that Anonymous sign-in is turned on in Firebase.');
+  else if(NET.status === 'connecting') renderMsgScreen('Connecting…', '');
+  else if(!room) renderHome();
+  else if(!G) renderLobby();
+  else if(G.phase === 'play') renderPlay();
+  else renderHandEnd();
+  if(UI.sheet) renderSheet();
+}
+
+/* ---------- events ---------- */
+const myTurnNow = () => G && G.phase === 'play' && mySeat >= 0 && G.turn === mySeat;
+app.addEventListener('click', e => {
+  const t = e.target.closest('[data-act]'); if(!t) return;
+  if(t.classList.contains('sheetbg') && e.target.closest('[data-stop]')) return;
+  const a = t.dataset.act, id = t.dataset.id, v = +t.dataset.v;
+  const play = ['hand','loose','build','pile','clearfloor','chow','buildbtn','drift','choose'];
+  if(play.includes(a) && !myTurnNow()) return;
+  switch(a){
+    case 'setn': UI.setup.n = v; break;
+    case 'teams': UI.setup.teams = !UI.setup.teams; break;
+    case 'target': UI.setup.target = v; break;
+    case 'house': UI.setup.house = v === 1; break;
+    case 'create': return createRoom();
+    case 'join': return joinRoom(UI.joinCode);
+    case 'copy': {
+      const link = document.getElementById('sharelink');
+      const done = () => { UI.copied = true; render(); setTimeout(() => { UI.copied = false; render(); }, 1500); };
+      try{ navigator.clipboard.writeText(link.value).then(done, () => { link.select(); }); }catch(err){ link.select(); }
+      return;
+    }
+    case 'seat': return moveSeat(v);
+    case 'deal': return dealGame();
+    case 'leave': UI.sheet = null; return leaveRoom();
+    case 'lobby': UI.sheet = null; txRoom(cur => { cur.state = null; cur.v = (cur.v||0) + 1; return cur; }); return;
+    case 'again': { UI.sheet = null; startGame({ n:G.n, teams:G.teams, target:G.target, house:!!G.house, names:G.players.map(p=>p.name) }); clearSel(); return pushMove(); }
+    case 'next': dealHand(); clearSel(); return pushMove();
+    case 'hand': UI.card = UI.card === id ? null : id; UI.msg=''; break;
+    case 'loose': UI.loose.has(id) ? UI.loose.delete(id) : UI.loose.add(id); UI.msg=''; break;
+    case 'build': UI.builds.has(id) ? UI.builds.delete(id) : UI.builds.add(id); UI.msg=''; break;
+    case 'pile': { const [i,k] = id.split(':').map(Number); const d = UI.piles.get(i) || 0; const nd = k < d ? k : k + 1;
+      nd ? UI.piles.set(i, nd) : UI.piles.delete(i); UI.msg=''; break; }
+    case 'clearfloor': UI.loose.clear(); UI.builds.clear(); UI.piles.clear(); UI.msg=''; break;
+    case 'chow': return doChow();
+    case 'buildbtn': return doBuild();
+    case 'drift': return doDrift();
+    case 'choose': { UI.choice = null; return doBuild(v); }
+    case 'closechoice': UI.choice = null; break;
+    case 'rules': UI.sheet = 'rules'; break;
+    case 'menu': UI.sheet = 'menu'; break;
+    case 'closesheet': UI.sheet = null; break;
+  }
+  render();
+});
+app.addEventListener('input', e => {
+  const f = e.target.dataset.field; if(!f) return;
+  let val = e.target.value;
+  if(f === 'joinCode'){ val = val.toUpperCase().replace(/[^A-Z]/g,''); if(e.target.value !== val) e.target.value = val; }
+  UI[f] = val;
+  if(f === 'myName') LSset('kasino-name', val);
+});
+app.addEventListener('keydown', e => { if(e.key === 'Enter' && e.target.id === 'joincode') joinRoom(UI.joinCode); });
+
+initNet();
+
+</script>
+</body>
+</html>
