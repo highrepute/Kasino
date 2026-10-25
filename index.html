@@ -191,7 +191,7 @@ const esc = s => String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>
 let G = null;
 const UI = { card:null, loose:new Set(), builds:new Set(), piles:new Map(), msg:'', msgType:'', choice:null, sheet:null, baseV:null,
   setup:{ n:2, names:['','','',''], teams:true, target:21, house:true } };
-const houseSetup = () => UI.setup.house !== false;
+const houseSetup = () => true;   // only the house rules are offered now
 /* ---------- helpers ---------- */
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 const sideOf = p => G.teams ? p % 2 : p;
@@ -202,9 +202,11 @@ const topOf = i => { const pl = G.players[i].pile; return pl[pl.length-1]; };
 const stealable = (p,i) => i !== p && !sameSide(p,i) && G.players[i].pile.length > 0;
 function save(){}
 
-/* Split items into groups that each total v. Returns array of groups or null. */
-function partition(items, v){
+/* Split items into groups that each total v. Returns array of groups or null.
+   srcOf(card) names the pile a card came from (or null): one block can't hold two cards from the same pile. */
+function partition(items, v, srcOf = () => null){
   const n = items.length; if(!n) return [];
+  const src = items.map(x => srcOf(x));
   const vals = items.map(x => x.r); const tot = vals.reduce((a,b)=>a+b,0);
   if(tot % v || Math.max(...vals) > v) return null;
   const order = [...Array(n).keys()].sort((a,b)=>vals[b]-vals[a]);
@@ -218,11 +220,12 @@ function partition(items, v){
       if(rec(vals[i], k+1, left-1)) return true;
       used[i] = false; g--; return false;
     }
-    let prev = -1;
+    let prev = null;
     for(let k=start;k<n;k++){
-      const i = order[k];
-      if(used[i] || vals[i] === prev || sum + vals[i] > v) continue;
-      prev = vals[i]; used[i] = true; gid[i] = g;
+      const i = order[k], key = vals[i] + '|' + src[i];
+      if(used[i] || key === prev || sum + vals[i] > v) continue;
+      if(src[i] != null && gid.some((gg,j) => used[j] && gg === g && src[j] === src[i])) continue;
+      prev = key; used[i] = true; gid[i] = g;
       if(rec(sum + vals[i], k+1, left-1)) return true;
       used[i] = false;
     }
@@ -236,10 +239,7 @@ function partition(items, v){
 /* Largest legal capture for a card of value v */
 function bestCapture(p, v){
   const builds = G.builds.filter(b => b.value === v);
-  if(G.house && !builds.length){
-    const singles = G.loose.filter(c => c.r === v);
-    return singles.length ? { loose:singles, piles:[], builds:[] } : null;
-  }
+  if(!builds.length && !G.loose.some(c => c.r === v)) return null;
   const piles = G.players.map((_,i)=>i).filter(i => stealable(p,i));
   const items = [...G.loose.map(c=>({c, pile:null})), ...piles.map(i=>({c:topOf(i), pile:i}))].slice(0,30);
   const subs = [];
@@ -280,7 +280,7 @@ const stoleText = piles => piles.map(x => `${x.cards.map(cardName).join(' ')} fr
 
 /* ---------- game flow ---------- */
 function startGame(cfg){
-  G = { n:cfg.n, teams: cfg.n === 4 && cfg.teams, target: cfg.target, house: cfg.house !== false,
+  G = { n:cfg.n, teams: cfg.n === 4 && cfg.teams, target: cfg.target, house: true,
     players: Array.from({length:cfg.n},(_,i)=>cfg.names[i]).map((nm,i)=>({ name:(nm||'').trim() || ('Player '+(i+1)), bot:(cfg.bots && cfg.bots[i]) || null, hand:[], pile:[] })),
     handNo:0, starter: Math.floor(Math.random()*cfg.n) };
   G.scores = Array(nSides()).fill(0);
@@ -326,6 +326,8 @@ function gather(){
       .map(([i,d]) => ({ i, d, cards: G.players[i].pile.slice(-d).reverse() })) };
 }
 
+const pileSrc = s => { const m = new Map(); s.piles.forEach(x => x.cards.forEach(c => m.set(c.id, x.i))); return c => m.has(c.id) ? m.get(c.id) : null; };
+
 function doChow(){
   const s = gather(); if(!s.c) return say('Pick a card from your hand first.','err');
   const v = s.c.r;
@@ -333,20 +335,18 @@ function doChow(){
     const b = bestCapture(G.turn, v);
     if(!b) return say(`Nothing on the floor adds up to ${RN(v)}. Try Build or Drift.`,'err');
     UI.loose = new Set(b.loose.map(x=>x.id)); UI.builds = new Set(b.builds.map(x=>x.id)); UI.piles = new Map(b.piles.map(i=>[i,1]));
-    const more = G.house && b.builds.length ? ' You can also dig deeper into piles before you take it.' : '';
+    const more = ' You can also dig deeper into piles before you take it.';
     return say(`Picked everything your ${cardName(s.c)} can chow. Tap Chow again to take it.${more}`,'info');
   }
   const wrong = s.builds.find(b => b.value !== v);
   if(wrong) return say(`That build is worth ${wrong.value}. You need a ${RN(wrong.value)} to chow it.`,'err');
   const pileCards = s.piles.flatMap(x => x.cards);
   const items = [...s.loose, ...pileCards];
-  if(G.house && !s.builds.length){
-    if(s.piles.length) return say("You can only steal from piles when there's a build involved.",'err');
-    const bad = s.loose.find(x => x.r !== v);
-    if(bad) return say(`Without a build, your ${cardName(s.c)} can only chow loose ${RN(v)}s. To take a set like that, build it first.`,'err');
-  } else {
-    if(!G.house && s.piles.some(x => x.d > 1)) return say('Only the top card of a pile can be taken.','err');
-    if(items.length && !partition(items, v)) return say(`The cards you picked don't split into sets that each add up to ${v}.`,'err');
+  if(!s.builds.length && !s.loose.some(x => x.r === v))
+    return say(`To take sets of ${v}, you need a loose ${RN(v)} or a build of ${v} to chow as well. Otherwise build them first.`,'err');
+  if(items.length && !partition(items, v, pileSrc(s))){
+    const twoFromOne = s.piles.some(x => x.d > 1) && partition(items, v);
+    return say(twoFromOne ? `Each block can only use one card from any one pile.` : `The cards you picked don't split into sets that each add up to ${v}.`,'err');
   }
   const hand2 = s.me.hand.filter(x => x !== s.c);
   const rest = G.builds.filter(b => !s.builds.includes(b));
@@ -374,7 +374,8 @@ function doBuild(choiceV){
   if(s.builds.length === 1){
     const B = s.builds[0];
     if(sameSide(B.owner, me)){
-      const v = B.value; const groups = partition([s.c, ...s.loose, ...pileCards], v);
+      const v = B.value; const groups = partition([s.c, ...s.loose, ...pileCards], v, pileSrc(s));
+      if(!groups && s.piles.some(x => x.d > 1) && partition([s.c, ...s.loose, ...pileCards], v)) return say('Each block can only use one card from any one pile.','err');
       if(!groups) return say(`To add to the build of ${v}, your card plus the cards you pick must make sets of ${v}.`,'err');
       const o = owed(me, hand2, G.builds); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
       s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x)); takeFromPiles(s.piles);
@@ -438,6 +439,8 @@ function doDrift(){
 
 function endHand(){
   let swept = 0;
+  // Keep the final table so players can look at it before the scores
+  G.endFloor = JSON.parse(JSON.stringify({ loose:G.loose, builds:G.builds }));
   if(G.lastCapturer !== null){
     const rest = [...G.loose, ...G.builds.flatMap(b => b.groups.flat())];
     rest.forEach(c => G.players[G.lastCapturer].pile.push(c)); swept = rest.length;
@@ -465,6 +468,7 @@ function endHand(){
 }
 
 /* ---------- modes ---------- */
+const APP_VERSION = '1.7 · 25 Oct';
 let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
 let DRY = null, BOT = false;
 const LOCAL_KEY = 'kasino-local-v1';
@@ -554,11 +558,11 @@ function candidates(p){
     const bv = G.builds.filter(b => b.value === c.r);
     if(G.house){
       const singles = L.filter(x => x.r === c.r).map(x => x.id);
-      if(bv.length){
+      if(bv.length || singles.length){
         out.push({ k:'chow', c:c.id, loose:singles, builds:bv.map(b=>b.id) });
         const ex = greedyBlocks(p, c.r, singles);
         if(ex.loose.length || ex.piles.length) out.push({ k:'chow', c:c.id, loose:[...singles, ...ex.loose], builds:bv.map(b=>b.id), piles:ex.piles });
-      } else if(singles.length) out.push({ k:'chow', c:c.id, loose:singles });
+      }
     } else {
       const b = bestCapture(p, c.r);
       if(b) out.push({ k:'chow', c:c.id, loose:b.loose.map(x=>x.id), builds:b.builds.map(x=>x.id), piles:b.piles.map(i=>[i,1]) });
@@ -592,8 +596,7 @@ function candidates(p){
 const STYLE = {
   easy:    { randomP:0.3, noise:0.9,  hold:false, farm:false, block:false, threat:false },
   medium:  { randomP:0,   noise:0.25, hold:true,  farm:true,  block:false, threat:false },
-  hard:    { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true  },
-  oldhard: { randomP:0,   noise:0.02, hold:false, farm:false, block:false, threat:true  }   // previous version, kept for testing
+  hard:    { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true  }
 };
 
 /* Card count from p's seat: how many of each value could still be in rivals' hands (or the undealt pack). */
@@ -634,14 +637,15 @@ function evalTable(S, p, st = STYLE.medium){
     } else score -= v * 0.55 * oppScale;
   });
   if(st.hold){
-    // Cards still in hand: high cards are worth more kept, most of all early and when they control a value
-    for(const c of hand){
-      const r = c.r;
-      let hv = 0.07 * Math.max(0, r - 6) * early;
+    // Cards still in hand: high cards are worth more kept, most of all early and when they control a value.
+    // Each extra copy of a value adds a bit less, but always adds.
+    for(let r=7; r<=10; r++){
+      const k = K.mine[r]; if(!k) continue;
+      let hv = 0.07 * (r - 6) * early;
       if(K.mono(r)) hv += 0.30 * (r / 10) * early;
-      else if(K.rivals(r) <= 1 && r >= 7) hv += 0.12 * (r / 10) * early;      // one card away from owning it
-      if(st.block && K.mine[r] === 1 && K.rivals(r) >= 1 && K.rivals(r) <= 2 && r >= 8) hv += 0.10 * early;   // our card stops a rival owning it
-      score += hv / Math.max(1, K.mine[r]) ;
+      else if(K.rivals(r) <= 1) hv += 0.12 * (r / 10) * early;               // one card away from owning it
+      if(st.block && r >= 8 && K.rivals(r) >= 1 && K.rivals(r) <= 2) hv += 0.10 * early;   // our cards stop a rival owning it
+      score += hv * [0, 1, 1.6, 2.0, 2.3][k];
     }
   }
   S.loose.forEach(c => score -= W(c) * 0.12 + (isPoint(c) ? W(c) * 0.25 : 0));
@@ -832,7 +836,7 @@ function onRoom(r){
   for(let i=0; i<r.cfg.n; i++) if(seats['s'+i] && seats['s'+i].uid === uid) mySeat = i;
   if(r.state){
     if(UI.baseV !== r.v){ clearSel(); UI.msg = ''; }
-    G = JSON.parse(r.state); UI.baseV = r.v;
+    G = JSON.parse(r.state); G.house = true; UI.baseV = r.v;
     const mine = G.phase === 'play' && G.turn === mySeat;
     if(mine && !wasMine){ try{ navigator.vibrate && navigator.vibrate(120); }catch(e){} }
     document.title = mine ? 'Your turn · Kasino' : 'Kasino Table';
@@ -920,7 +924,7 @@ function startLocal(mode){
 }
 function resumeLocal(){
   const d = loadLocal(); if(!d) return;
-  MODE = d.mode; G = d.G; UI.shown = null; clearSel(); UI.msg = '';
+  MODE = d.mode; G = d.G; G.house = true; UI.shown = null; clearSel(); UI.msg = '';
   render(); scheduleBots();
 }
 
@@ -972,37 +976,26 @@ function renderSheet(){
         <li>3 players: 13 cards each, and one card face up on the floor.</li>
         <li>4 players: 10 cards each. Partners sit opposite and share a score.</li>
         <li>The loser of each hand plays first in the next.</li></ul>
-      ${(G ? G.house : room ? room.cfg.house : houseSetup()) ? `
-      <p><b>You're playing your house rules.</b> Choose Standard on the start screen for the published version.</p>
+      
       <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
-        <li><b>Chow</b> (capture): a card takes loose cards of the same value, and any build of that value. Loose sets like 3+4 can't be chowed; build them first.</li>
+        <li><b>Chow</b> (capture): a card takes loose cards of the same value and any build of that value. When it does, it can also take extra blocks of that value from loose cards and rivals' piles. A loose set like 3+4 can't be chowed on its own; build it first.</li>
         <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
         <li><b>Drift</b>: put your card down on its own. You can drift even while you own a build, but never your last card of that build's value.</li></ul>
       <h3>Builds and stealing</h3><ul>
         <li>A build with one block, like 5+3, can be raised by a rival adding one card from their hand, if they hold the new total. It then belongs to them. Once a second block goes on, it's locked and can only be chowed.</li>
         <li>To add to a build you own, play one card from your hand into a block (on its own if it matches). Then keep adding blocks from any mix of floor cards and rivals' piles, digging as far down a pile as the cards add up.</li>
-        <li>When you chow a build, you can take extra blocks of that value from floor cards and rivals' piles in the same move.</li>
-        <li>Stealing only works with a build already on the floor. You can't steal into a brand-new build, or when chowing a loose card, and you can never chow straight off a pile.</li>
+        <li>When you chow a build or a matching loose card, you can take extra blocks of that value from floor cards and rivals' piles in the same move.</li>
+        <li>Each block can use only one card from any one pile. Once a pile's top card has gone into a block, the card under it is open for the next block.</li>
+        <li>Stealing needs a build or a matching loose card to go with. You can't steal into a brand-new build, and you can never chow straight off a pile.</li>
         <li>Only one build of each value can be on the floor.</li></ul>
-      <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>` : `
-      <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
-        <li><b>Chow</b> (capture): take floor cards that match your card, sets of loose cards that add up to it, any build of that value, and the top card of a rival's pile when it fits. Several sets at once is fine.</li>
-        <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
-        <li><b>Drift</b>: put your card down on its own.</li></ul>
-      <h3>Builds</h3><ul>
-        <li>A <b>single</b> build (one set, like 5+3) can be raised by a rival adding one card from their hand, if they hold the new total. It then belongs to them.</li>
-        <li>Adding another set of the same value, or stacking a matching card on top, makes it <b>locked</b>. Locked builds can only be chowed.</li>
-        <li>When you add to your own build, you may steal the top card of a rival's pile into it, as long as a card from your hand goes in too.</li>
-        <li>Only one build of each value can be on the floor.</li>
-        <li>While you own a build you can't drift (except in the second deal of a 2-player game), and you can't play away your last card of that value.</li></ul>
-      <h3>Piles</h3><p>Chowed cards go face up on your pile, lowest card on top. That top card is open to rivals. Whoever chows last in the hand takes everything left on the floor.</p>`}
+      <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>
       <h3>Scoring each hand</h3><ul>
         <li>Most cards: 2 points (a tie gives 1 each)</li>
         <li>At least five spades: 1 point</li>
         <li>Spy two, the 2♠: 1 point</li>
         <li>Razzer, the 10♦: 2 points</li>
         <li>Each ace: 1 point</li></ul>
-      <p class="muted">Gold dots mark the point cards. First past the target score wins. Rules follow <a href="https://www.pagat.com/fishing/african_casino.html" target="_blank" rel="noopener">pagat.com's South African Casino</a>, with build details from the Khasino rules. House rules vary, so agree any changes before you deal.</p>
+      <p class="muted">Gold dots mark the point cards. First past the target score wins. Rules follow <a href="https://www.pagat.com/fishing/african_casino.html" target="_blank" rel="noopener">pagat.com's South African Casino</a>, with your table's house rules for drifting, stealing and pile order.</p>
       <button class="big-btn" data-act="closesheet">${G ? 'Back to the table' : 'Close'}</button></div></div>`);
   } else if(UI.sheet === 'menu'){
     app.insertAdjacentHTML('beforeend', `<div class="sheetbg" data-act="closesheet"><div class="sheet" data-stop="1">
@@ -1027,9 +1020,6 @@ const fanHtml = () => [{r:10,s:'D'},{r:2,s:'S'},{r:1,s:'H'},{r:7,s:'C'},{r:5,s:'
 /* shared setup controls */
 const segPlayers = S => `<div class="field"><span class="label">Players</span><div class="seg">${[2,3,4].map(k=>`<button data-act="setn" data-v="${k}" aria-pressed="${S.n===k}">${k}</button>`).join('')}</div></div>`;
 const toggleTeams = (S, sub) => S.n===4 ? `<button class="toggle" data-act="teams" aria-pressed="${S.teams}"><span class="box2">${S.teams?'✓':''}</span><span><b>Play in partners</b><br><small class="muted">${sub}</small></span></button>` : '';
-const segRules = () => `<div class="field"><span class="label">Rules</span><div class="seg">
-    <button data-act="house" data-v="1" aria-pressed="${houseSetup()}">Our house rules</button>
-    <button data-act="house" data-v="0" aria-pressed="${!houseSetup()}">Standard</button></div></div>`;
 const segTarget = S => `<div class="field"><span class="label">Play to</span><div class="seg">${[11,21,31].map(k=>`<button data-act="target" data-v="${k}" aria-pressed="${S.target===k}">${k}</button>`).join('')}</div></div>`;
 const segLevel = S => `<div class="field"><span class="label">Computer strength</span><div class="seg">${Object.keys(LEVELS).map(k=>`<button data-act="level" data-v="${k}" aria-pressed="${S.level===k}">${LEVELS[k]}</button>`).join('')}</div></div>`;
 const nameField = () => `<div class="field"><span class="label">Your name</span><input type="text" id="myname" data-field="myName" maxlength="16" placeholder="e.g. Thandi" value="${esc(UI.myName)}"></div>`;
@@ -1044,7 +1034,7 @@ function onlineTab(){
     <section class="box"><h3>Join a room</h3>
       <div class="joinrow"><input type="text" id="joincode" data-field="joinCode" maxlength="4" placeholder="CODE" value="${esc(UI.joinCode)}" autocapitalize="characters" autocomplete="off" aria-label="Room code"><button class="big-btn" data-act="join" ${wait?'disabled':''}>Join</button></div></section>
     <section class="box"><h3>Or start a new room</h3>
-      ${segPlayers(S)}${toggleTeams(S,'Seats 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segRules()}${segTarget(S)}
+      ${segPlayers(S)}${toggleTeams(S,'Seats 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segTarget(S)}
       <p class="muted" style="margin:0">Short of players? Fill empty seats with the computer in the lobby.</p>
       <button class="big-btn" data-act="create" ${wait?'disabled':''}>${wait?'Connecting…':'Create room'}</button></section>`;
 }
@@ -1055,7 +1045,7 @@ function passTab(){
   return `<section class="box"><h3>One phone, passed round</h3>
     ${segPlayers(S)}
     <div class="field"><span class="label">Names, in seating order</span><div class="names">${names}</div></div>
-    ${toggleTeams(S,'Players 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segRules()}${segTarget(S)}
+    ${toggleTeams(S,'Players 1 &amp; 3 against 2 &amp; 4, sharing a score')}${segTarget(S)}
     <button class="big-btn" data-act="startpass">Shuffle and deal</button></section>`;
 }
 function cpuTab(){
@@ -1063,7 +1053,7 @@ function cpuTab(){
   return `${nameField()}<section class="box"><h3>You against the computer</h3>
     ${segPlayers(S)}
     <p class="muted" style="margin:0">${S.n===2?'You and one computer player.':S.n===3?'You and two computer players.':S.teams?'You and a computer partner against two computers.':'You and three computer players.'}</p>
-    ${toggleTeams(S,'You and the computer opposite you against the other two')}${segLevel(S)}${segRules()}${segTarget(S)}
+    ${toggleTeams(S,'You and the computer opposite you against the other two')}${segLevel(S)}${segTarget(S)}
     <button class="big-btn" data-act="startcpu">Shuffle and deal</button></section>`;
 }
 
@@ -1081,6 +1071,7 @@ function renderHome(){
     ${UI.homeMsg ? `<div class="msg err" role="status">${esc(UI.homeMsg)}</div>` : ''}
     ${body}
     <button class="iconbtn" style="align-self:center" data-act="rules">How to play</button>
+    <p class="muted" style="margin:0;text-align:center;font-size:12px">Version ${APP_VERSION}</p>
   </div>`;
 }
 
@@ -1104,7 +1095,7 @@ function renderLobby(){
     rows += `<div class="seat"><span class="sn">${i+1}</span><span class="sname">${who}${team}</span><span class="seatbtns">${btns}</span></div>`;
   }
   const full = filled === n;
-  const summary = `${n} players · ${r.cfg.teams?'partners':'every player for themselves'} · ${r.cfg.house?'house rules':'standard rules'} · to ${r.cfg.target}`;
+  const summary = `${n} players · ${r.cfg.teams?'partners':'every player for themselves'} · to ${r.cfg.target}`;
   const action = mySeat < 0
     ? `<p class="muted">${full ? 'This room is full.' : 'Pick a seat to join in.'}</p>`
     : full ? `<button class="big-btn" data-act="deal">Shuffle and deal</button>`
@@ -1138,7 +1129,8 @@ function renderCover(){
 
 function renderPlay(){
   const V = viewSeat(), spect = V < 0, cur = G.players[G.turn];
-  const myTurn = !spect && G.turn === V && !cur.bot;
+  const over = G.phase !== 'play';
+  const myTurn = !over && !spect && G.turn === V && !cur.bot;
   const order = spect ? [...Array(G.n).keys()] : [...Array(G.n-1).keys()].map(k => (V+k+1) % G.n);
   const opps = order.map(i => {
     const p = G.players[i], t = topOf(i), can = myTurn && stealable(V,i), partner = !spect && G.teams && sameSide(V,i);
@@ -1164,7 +1156,12 @@ function renderPlay(){
       <span class="meta">${owner} build · ${locked?'locked':'single, can be raised'}</span></span></button>`;
   }).join('');
   const floorEmpty = !G.loose.length && !G.builds.length;
-  const moves = recentMoves(V);
+  let moves = recentMoves(V);
+  if(over){
+    const R = G.result, swept = R && R.sweeper !== null && R.swept
+      ? `${G.players[R.sweeper].name} made the last chow and takes the ${R.swept} card${R.swept===1?'':'s'} left on the floor.` : 'Nothing is left on the floor.';
+    moves = [...(G.log || []).slice(-G.n), { text: swept }];
+  }
   const lm = moves.length ? movesHtml(moves) : `<div class="lastmove">${esc(G.players[G.turn].name)} plays first this hand.</div>`;
   let mine = '', actions = '';
   const waitTxt = cur.bot ? `${cur.name} is thinking…` : `Waiting for ${cur.name} to play.`;
@@ -1180,7 +1177,9 @@ function renderPlay(){
     mine = `<section class="me"><div class="mehead"><div><div class="label">Your hand</div><b style="font-family:var(--display);font-size:18px">${esc(P.name)}</b></div>
       <div class="pile">${myTop ? cardBtn(myTop,null) : '<div class="empty"></div>'}<small>${P.pile.length} chowed</small></div></div>
       <div class="hand">${P.hand.map(c => cardBtn(c, myTurn?'hand':null, {sel:UI.card===c.id, cls:'big'})).join('')}</div></section>`;
-    actions = myTurn ? `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(hint)}</div>
+    actions = over ? `<div class="actions"><div class="msg">Hand over. This is how the table finished.</div>
+      <button class="big-btn" data-act="scores">See the scores</button></div>`
+    : myTurn ? `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(hint)}</div>
       <div class="btns ${MODE==='pass'?'':'three'}">
         <button class="btn primary" data-act="chow" ${sel?'':'disabled'}>Chow<small>capture</small></button>
         <button class="btn" data-act="buildbtn" ${sel?'':'disabled'}>Build<small>or add to</small></button>
@@ -1188,7 +1187,8 @@ function renderPlay(){
         ${MODE==='pass' ? '<button class="btn ghost" data-act="hide" title="Hide my cards">Hide</button>' : ''}
       </div></div>`
       : `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(UI.msg || waitTxt)}</div></div>`;
-  } else actions = `<div class="actions"><div class="msg">You're watching this game. ${esc(waitTxt)}</div></div>`;
+  } else actions = over ? `<div class="actions"><div class="msg">Hand over.</div><button class="big-btn" data-act="scores">See the scores</button></div>`
+    : `<div class="actions"><div class="msg">You're watching this game. ${esc(waitTxt)}</div></div>`;
   app.innerHTML = header() + `
     <div class="opps">${opps}</div>
     ${lm}
@@ -1201,11 +1201,18 @@ function renderPlay(){
   if(UI.choice && myTurn) renderChoice();
 }
 
+/* End of a hand: show the final table first, then the scores */
+function handOver(){
+  if(UI.scoresSeen === G.moveNo || !G.endFloor) return renderHandEnd();
+  const real = G;
+  G = { ...real, loose: real.endFloor.loose, builds: real.endFloor.builds };
+  try{ renderPlay(); } finally { G = real; }
+}
 const needCover = () => MODE === 'pass' && G.phase === 'play' && !G.players[G.turn].bot && UI.shown !== G.turn;
 function render(){
   if(DRY) return;
-  if(MODE === 'online' && room){ if(!G) renderLobby(); else if(G.phase === 'play') renderPlay(); else renderHandEnd(); }
-  else if((MODE === 'pass' || MODE === 'cpu') && G){ if(G.phase !== 'play') renderHandEnd(); else if(needCover()) renderCover(); else renderPlay(); }
+  if(MODE === 'online' && room){ if(!G) renderLobby(); else if(G.phase === 'play') renderPlay(); else handOver(); }
+  else if((MODE === 'pass' || MODE === 'cpu') && G){ if(G.phase !== 'play') handOver(); else if(needCover()) renderCover(); else renderPlay(); }
   else { if(MODE !== 'online') MODE = null; renderHome(); }
   if(UI.sheet) renderSheet();
 }
@@ -1264,6 +1271,7 @@ app.addEventListener('click', e => {
     case 'drift': return doDrift();
     case 'choose': { UI.choice = null; return doBuild(v); }
     case 'closechoice': UI.choice = null; break;
+    case 'scores': UI.scoresSeen = G.moveNo; window.scrollTo(0,0); break;
     case 'rules': UI.sheet = 'rules'; break;
     case 'menu': UI.sheet = 'menu'; break;
     case 'closesheet': UI.sheet = null; break;
