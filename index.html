@@ -173,6 +173,11 @@ a{color:var(--gold)}
 .tag.cpu{color:var(--ok)}
 .btns.three{grid-template-columns:1fr 1fr 1fr}
 .lastmove div+div{margin-top:4px;padding-top:4px;border-top:1px solid var(--line)}
+.rate{font-size:13px;color:var(--muted);background:var(--rail);border:1px dashed var(--line);border-radius:10px;padding:8px 10px}
+.rate b{color:var(--gold);font-family:var(--display)}
+.rlist{display:flex;flex-direction:column;gap:4px;font-variant-numeric:tabular-nums}
+.rrow{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.rrow b{color:var(--gold);font-family:var(--display)}
 .big-btn[disabled]{opacity:.5;cursor:default}
 </style>
 </head>
@@ -282,7 +287,7 @@ const stoleText = piles => piles.map(x => `${x.cards.map(cardName).join(' ')} fr
 function startGame(cfg){
   G = { n:cfg.n, teams: cfg.n === 4 && cfg.teams, target: cfg.target, house: true,
     players: Array.from({length:cfg.n},(_,i)=>cfg.names[i]).map((nm,i)=>({ name:(nm||'').trim() || ('Player '+(i+1)), bot:(cfg.bots && cfg.bots[i]) || null, hand:[], pile:[] })),
-    handNo:0, starter: Math.floor(Math.random()*cfg.n) };
+    handNo:0, starter: Math.floor(Math.random()*cfg.n), gameId: Math.random().toString(36).slice(2,10) };
   G.scores = Array(nSides()).fill(0);
   dealHand();
 }
@@ -295,13 +300,14 @@ function dealHand(){
   dealRound(G.n === 3 ? 13 : 10);
   if(G.n === 3) G.loose.push(G.deck.pop());
   G.turn = G.starter; G.phase = 'play';
+  G.snaps = [snapDeal()];
 }
 function dealRound(k){
   for(let j=0;j<k;j++) for(let i=0;i<G.n;i++) G.players[(G.starter+i)%G.n].hand.push(G.deck.pop());
   G.players.forEach(p => p.hand.sort(byRank));
 }
 function clearSel(){ UI.card = null; UI.loose.clear(); UI.builds.clear(); UI.piles.clear(); UI.choice = null; }
-function say(text, type){ if(DRY){ DRY.err = text; return; } UI.msg = text; UI.msgType = type || ''; render(); }
+function say(text, type){ if(DRY){ DRY.err = text; return; } if(SIM) return; UI.msg = text; UI.msgType = type || ''; render(); }
 
 function finish(text){
   if(DRY){ DRY.ok = true; return; }
@@ -310,10 +316,12 @@ function finish(text){
   if(G.players.every(p => !p.hand.length)){
     if(G.n === 2 && G.round === 1){
       G.round = 2; dealRound(10); G.turn = G.starter; G.phase = 'play';
+      (G.snaps = G.snaps || []).push(snapDeal());
       G.lastMove.text += ' — first ten cards done. Ten more each have been dealt; the floor stays as it is.';
     } else endHand();
   } else { G.turn = (G.turn + 1) % G.n; G.phase = 'play'; }
   G.log = (G.log || []).concat([G.lastMove]).slice(-12);
+  if(SIM) return;
   commitMove(); window.scrollTo(0,0);
 }
 
@@ -441,6 +449,7 @@ function endHand(){
   let swept = 0;
   // Keep the final table so players can look at it before the scores
   G.endFloor = JSON.parse(JSON.stringify({ loose:G.loose, builds:G.builds }));
+  G.endPiles = G.players.map(p => p.pile.length);
   if(G.lastCapturer !== null){
     const rest = [...G.loose, ...G.builds.flatMap(b => b.groups.flat())];
     rest.forEach(c => G.players[G.lastCapturer].pile.push(c)); swept = rest.length;
@@ -468,9 +477,9 @@ function endHand(){
 }
 
 /* ---------- modes ---------- */
-const APP_VERSION = '1.7 · 25 Oct';
+const APP_VERSION = '1.11 · 25 Oct';
 let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
-let DRY = null, BOT = false;
+let DRY = null, BOT = false, SIM = false;
 const LOCAL_KEY = 'kasino-local-v1';
 const LEVELS = { easy:'Easy', medium:'Medium', hard:'Hard' };
 const humanSeats = () => G.players.map((p,i) => p.bot ? -1 : i).filter(i => i >= 0);
@@ -481,7 +490,7 @@ function viewSeat(){
   return humanSeats()[0] ?? -1;
 }
 function commitMove(){
-  if(DRY) return;
+  if(DRY || SIM) return;
   G.moveNo = (G.moveNo || 0) + 1;
   if(MODE === 'online') return pushMove(BOT);
   saveLocal(); render(); scheduleBots();
@@ -908,6 +917,59 @@ function leaveLocal(){
   try{ history.replaceState(null, '', location.pathname); }catch(e){}
 }
 
+/* ---------- rate my cards ---------- */
+// A simple formula from the dealt cards. The weights were fitted to thousands of played-out hands
+// (Medium computer in every seat), one set per table size. In a 2-player 2nd deal it also counts what each side has already won.
+const RATE_MODEL = {"2":{"keys":["aces","razzer","spy","spades","n10","n9","n8","n7","low","pairsHigh","tripsAny"],"w":[4.393,-0.109,0.675,-0.066,0.015,0.482,0.282,0.087,0.099,-0.014,-0.182,-0.078],"mean":5.08,"sd":0.576},"2d2":{"keys":["aces","razzer","spy","spades","n10","n9","n8","n7","low","pairsHigh","tripsAny","pCards","pAces","pRazzer","pSpy","pSpades","oCards","floorAces"],"w":[1.411,0.163,0.767,0.216,0.03,1.21,0.668,0.368,0.298,0.045,-0.543,-0.176,0.084,0.608,1.655,0.741,0.11,-0.116,0.016],"mean":5.08,"sd":1.84},"3":{"keys":["aces","razzer","spy","spades","n10","n9","n8","n7","low","pairsHigh","tripsAny"],"w":[1.317,-0.396,1.003,-0.331,0.063,1.073,0.597,0.341,0.244,-0.0,-0.359,-0.331],"mean":3.28,"sd":1.295},"4F":{"keys":["aces","razzer","spy","spades","n10","n9","n8","n7","low","pairsHigh","tripsAny"],"w":[0.775,-0.227,0.989,-0.056,0.056,0.998,0.544,0.283,0.171,-0.042,-0.273,-0.098],"mean":2.42,"sd":1.094},"4T":{"keys":["aces","razzer","spy","spades","n10","n9","n8","n7","low","pairsHigh","tripsAny"],"w":[4.252,-0.168,0.782,-0.244,0.006,0.644,0.467,0.216,0.106,-0.071,-0.189,-0.134],"mean":5.08,"sd":0.85}};
+UI.rateOn = LS('kasino-rate') === '1';
+function snapDeal(){
+  return JSON.parse(JSON.stringify({ round:G.round, players:G.players.map(p => ({ hand:p.hand, pile:p.pile })),
+    floor:[...G.loose, ...G.builds.flatMap(b => b.groups.flat())] }));
+}
+const modelKey = round => G.n === 2 ? (round === 2 ? '2d2' : '2') : G.n === 3 ? '3' : G.teams ? '4T' : '4F';
+function rateFeatures(snap, seat){
+  const h = snap.players[seat].hand, cnt = r => h.filter(c => c.r === r).length;
+  const f = { aces:cnt(1), razzer:+h.some(c=>c.r===10&&c.s==='D'), spy:+h.some(c=>c.r===2&&c.s==='S'), spades:h.filter(c=>c.s==='S').length,
+    n10:cnt(10), n9:cnt(9), n8:cnt(8), n7:cnt(7), low:h.filter(c=>c.r<=5).length,
+    pairsHigh:[7,8,9,10].filter(r=>cnt(r)>=2).length, tripsAny:[1,2,3,4,5,6,7,8,9,10].filter(r=>cnt(r)>=3).length };
+  if(snap.round === 2){
+    const mine = snap.players.flatMap((p,j) => sideOf(j) === sideOf(seat) ? p.pile : []);
+    const opp  = snap.players.flatMap((p,j) => sideOf(j) !== sideOf(seat) ? p.pile : []);
+    Object.assign(f, { pCards:mine.length, pAces:mine.filter(c=>c.r===1).length, pRazzer:+mine.some(c=>c.r===10&&c.s==='D'),
+      pSpy:+mine.some(c=>c.r===2&&c.s==='S'), pSpades:mine.filter(c=>c.s==='S').length, oCards:opp.length,
+      floorAces:(snap.floor || []).filter(c=>c.r===1).length });
+  }
+  return f;
+}
+function ratingOf(si, seat){
+  const snap = G.snaps && G.snaps[si]; if(!snap) return null;
+  const M = RATE_MODEL[modelKey(snap.round)]; if(!M) return null;
+  const f = rateFeatures(snap, seat);
+  const avg = Math.max(0, M.keys.reduce((a,k,i) => a + M.w[i+1] * (f[k] || 0), M.w[0]));
+  const label = avg >= M.mean + 0.7 * M.sd ? 'strong' : avg <= M.mean - 0.7 * M.sd ? 'weak' : 'average';
+  return { avg, share:M.mean, label };
+}
+function rateHtml(){
+  const V = viewSeat(), si = (G.snaps || []).length - 1;
+  const r = si >= 0 && V >= 0 ? ratingOf(si, V) : null;
+  if(!r) return '';
+  return `<b>Hand rating: about ${r.avg.toFixed(1)} pts</b> for ${G.teams ? 'your team' : 'you'} · ${r.label} (average ${r.share.toFixed(1)})`;
+}
+function ratingsListHtml(){
+  if(!G.snaps || !G.snaps.length) return '';
+  const deals = G.snaps.length;
+  const rows = G.players.map((p,seat) => {
+    const parts = G.snaps.map((_,si) => {
+      const r = ratingOf(si, seat), tag = deals > 1 ? `${si === 0 ? '1st' : '2nd'} deal ` : '';
+      return r ? `${tag}<b>${r.avg.toFixed(1)}</b> <span class="muted">${r.label}</span>` : '';
+    }).join(' · ');
+    return `<div class="rrow"><span>${esc(p.name)}</span><span>${parts}</span></div>`;
+  }).join('');
+  const r0 = ratingOf(0, 0);
+  const note = `Points each player's dealt cards were expected to win${G.teams ? ' for their team' : ''} over the whole hand.${deals > 1 ? ' The 2nd-deal figure also counts what was already won in the 1st deal.' : ''}${r0 ? ` An average hand gets ${r0.share.toFixed(1)}.` : ''}`;
+  return `<div class="field"><span class="label">Dealt hand ratings</span><div class="rlist">${rows}</div><small class="muted">${note}</small></div>`;
+}
+
 /* ---------- local games ---------- */
 function startLocal(mode){
   const S = UI.setup, n = S.n;
@@ -961,6 +1023,7 @@ function renderHandEnd(){
     ${done ? `<div class="hero"><div class="label">Game over</div><h1>${esc(sideName(G.winner))} ${G.teams?'win':'wins'}!</h1><p>First past ${G.target} points.</p></div>` : `<div><div class="label">Hand ${G.handNo} scored</div><h2 style="font-size:28px">Count up</h2></div>`}
     <p class="muted" style="margin:0">${sweep}</p>
     ${table}
+    ${UI.rateOn ? ratingsListHtml() : ''}
     ${done ? `<button class="big-btn" data-act="again">Play again, same table</button>${MODE==='online' ? '<button class="iconbtn" style="align-self:center" data-act="lobby">Back to the lobby</button>' : '<button class="iconbtn" style="align-self:center" data-act="quit">Back to the start screen</button>'}`
            : `<button class="big-btn" data-act="next">Deal hand ${G.handNo+1}</button><p class="muted" style="margin:0">${esc(G.players[G.starter].name)} lost the hand, so plays first next.</p>`}
   </div>`;
@@ -1003,6 +1066,7 @@ function renderSheet(){
       <button class="opt" data-act="again"><b>Restart with the same players</b><small>Scores go back to zero and a fresh hand is dealt</small></button>
       ${MODE === 'online' ? `<button class="opt" data-act="lobby"><b>Back to the lobby</b><small>End this game but keep the room and seats</small></button>
       <button class="opt" data-act="leave"><b>Leave this room</b><small>You can rejoin later with the room code</small></button>` : `<button class="opt" data-act="quit"><b>Back to the start screen</b><small>This game is saved. Continue it from the start screen</small></button>`}
+      <button class="toggle" data-act="ratetoggle" aria-pressed="${UI.rateOn}"><span class="box2">${UI.rateOn?'✓':''}</span><span><b>Rate my cards</b><br><small class="muted">Show how many points your dealt cards are likely to win, and everyone's dealt-hand ratings on the score screen.</small></span></button>
       <button class="iconbtn" data-act="closesheet">Keep playing</button></div></div>`);
   }
 }
@@ -1176,7 +1240,8 @@ function renderPlay(){
     }
     mine = `<section class="me"><div class="mehead"><div><div class="label">Your hand</div><b style="font-family:var(--display);font-size:18px">${esc(P.name)}</b></div>
       <div class="pile">${myTop ? cardBtn(myTop,null) : '<div class="empty"></div>'}<small>${P.pile.length} chowed</small></div></div>
-      <div class="hand">${P.hand.map(c => cardBtn(c, myTurn?'hand':null, {sel:UI.card===c.id, cls:'big'})).join('')}</div></section>`;
+      <div class="hand">${P.hand.map(c => cardBtn(c, myTurn?'hand':null, {sel:UI.card===c.id, cls:'big'})).join('')}</div>
+      ${UI.rateOn && !over ? `<div class="rate" id="ratechip" role="status">${rateHtml()}</div>` : ''}</section>`;
     actions = over ? `<div class="actions"><div class="msg">Hand over. This is how the table finished.</div>
       <button class="big-btn" data-act="scores">See the scores</button></div>`
     : myTurn ? `<div class="actions"><div class="msg ${UI.msgType}" role="status">${esc(hint)}</div>
@@ -1205,12 +1270,13 @@ function renderPlay(){
 function handOver(){
   if(UI.scoresSeen === G.moveNo || !G.endFloor) return renderHandEnd();
   const real = G;
-  G = { ...real, loose: real.endFloor.loose, builds: real.endFloor.builds };
+  G = { ...real, loose: real.endFloor.loose, builds: real.endFloor.builds,
+    players: real.players.map((p,i) => ({ ...p, pile: real.endPiles ? p.pile.slice(0, real.endPiles[i]) : p.pile })) };
   try{ renderPlay(); } finally { G = real; }
 }
 const needCover = () => MODE === 'pass' && G.phase === 'play' && !G.players[G.turn].bot && UI.shown !== G.turn;
 function render(){
-  if(DRY) return;
+  if(DRY || SIM) return;
   if(MODE === 'online' && room){ if(!G) renderLobby(); else if(G.phase === 'play') renderPlay(); else handOver(); }
   else if((MODE === 'pass' || MODE === 'cpu') && G){ if(G.phase !== 'play') handOver(); else if(needCover()) renderCover(); else renderPlay(); }
   else { if(MODE !== 'online') MODE = null; renderHome(); }
@@ -1271,6 +1337,7 @@ app.addEventListener('click', e => {
     case 'drift': return doDrift();
     case 'choose': { UI.choice = null; return doBuild(v); }
     case 'closechoice': UI.choice = null; break;
+    case 'ratetoggle': UI.rateOn = !UI.rateOn; LSset('kasino-rate', UI.rateOn ? '1' : '0'); break;
     case 'scores': UI.scoresSeen = G.moveNo; window.scrollTo(0,0); break;
     case 'rules': UI.sheet = 'rules'; break;
     case 'menu': UI.sheet = 'menu'; break;
