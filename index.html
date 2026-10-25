@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b2a26">
 <title>Kasino Table</title>
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-title" content="Kasino">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
 <style>
@@ -581,19 +588,62 @@ function candidates(p){
   return out;
 }
 
+/* What each level knows how to do. */
+const STYLE = {
+  easy:    { randomP:0.3, noise:0.9,  hold:false, farm:false, block:false, threat:false },
+  medium:  { randomP:0,   noise:0.25, hold:true,  farm:true,  block:false, threat:false },
+  hard:    { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true  },
+  oldhard: { randomP:0,   noise:0.02, hold:false, farm:false, block:false, threat:true  }   // previous version, kept for testing
+};
+
+/* Card count from p's seat: how many of each value could still be in rivals' hands (or the undealt pack). */
+function countFor(S, p){
+  const ms = sideOf(p), seen = Array(11).fill(0), mine = Array(11).fill(0), partner = Array(11).fill(0);
+  const vis = [...S.loose, ...S.builds.flatMap(b=>b.groups.flat()), ...S.players.flatMap(pl=>pl.pile)];
+  vis.forEach(c => seen[c.r]++);
+  S.players[p].hand.forEach(c => { seen[c.r]++; mine[c.r]++; });
+  // A partner who owns a build must be holding a card of that value
+  if(S.teams) S.builds.forEach(b => { if(b.owner !== p && sideOf(b.owner) === ms) partner[b.value] = 1; });
+  const rivals = r => Math.max(0, 4 - seen[r] - partner[r]);
+  const mono = r => rivals(r) === 0 && (mine[r] + partner[r]) > 0;
+  return { mine, partner, rivals, mono };
+}
+
 /* How good a table is for seat p's side. Only uses what p could see. */
-function evalTable(S, p){
+function evalTable(S, p, st = STYLE.medium){
   const ms = sideOf(p), opp = nSides() - 1, oppScale = (G.teams || G.n === 2) ? 1 : 0.5;
+  const K = countFor(S, p);
   let score = 0;
   S.players.forEach((pl,i) => { const v = sumW(pl.pile); score += sideOf(i) === ms ? v : -0.9 * v / opp; });
   const hand = S.players[p].hand;
+  const fullHand = S.n === 3 ? 13 : 10;
+  const early = Math.min(1, hand.length / fullHand);            // 1 at the start of a deal, 0 at the end
   S.builds.forEach(b => {
     const v = sumW(b.groups.flat());
     if(sideOf(b.owner) === ms){
-      const hold = b.owner === p ? hand.filter(c => c.r === b.value).length : 1;
-      score += v * ((hold >= 2 ? 0.85 : 0.62) + (b.groups.length > 1 ? 0.05 : 0));
+      const hold = b.owner === p ? K.mine[b.value] : 1;
+      const raisable = b.groups.length === 1 && b.value < 10;
+      let safe = (hold >= 2 ? 0.85 : 0.62) + (b.groups.length > 1 ? 0.05 : 0);
+      if(st.farm && K.mono(b.value)){
+        // Nobody else can chow it: it's ours unless it gets raised, and it keeps growing while we wait
+        safe = raisable ? 0.85 : 0.98;
+        const turnsLeft = Math.max(0, (b.owner === p ? hand.length : fullHand * early) - 1);
+        score += 0.09 * turnsLeft * (b.value / 10) * (raisable ? 0.5 : 1);
+      }
+      score += v * safe;
     } else score -= v * 0.55 * oppScale;
   });
+  if(st.hold){
+    // Cards still in hand: high cards are worth more kept, most of all early and when they control a value
+    for(const c of hand){
+      const r = c.r;
+      let hv = 0.07 * Math.max(0, r - 6) * early;
+      if(K.mono(r)) hv += 0.30 * (r / 10) * early;
+      else if(K.rivals(r) <= 1 && r >= 7) hv += 0.12 * (r / 10) * early;      // one card away from owning it
+      if(st.block && K.mine[r] === 1 && K.rivals(r) >= 1 && K.rivals(r) <= 2 && r >= 8) hv += 0.10 * early;   // our card stops a rival owning it
+      score += hv / Math.max(1, K.mine[r]) ;
+    }
+  }
   S.loose.forEach(c => score -= W(c) * 0.12 + (isPoint(c) ? W(c) * 0.25 : 0));
   if(S.builds.some(b => sideOf(b.owner) !== ms)){
     const pl = S.players[p].pile; if(pl.length) score -= 0.25 * W(pl[pl.length-1]);
@@ -631,16 +681,16 @@ function threat(S, p){
 }
 
 function chooseMove(p, level){
+  const st = STYLE[level] || STYLE.medium;
   const legal = [];
   for(const m of candidates(p)){ const S = tryMove(m); if(S) legal.push({ m, S }); }
   if(!legal.length) return null;
-  if(level === 'easy' && Math.random() < 0.3) return legal[Math.floor(Math.random()*legal.length)].m;
-  const noise = { easy:0.9, medium:0.25, hard:0.02 }[level] ?? 0.25;
+  if(Math.random() < st.randomP) return legal[Math.floor(Math.random()*legal.length)].m;
   let best = null, bs = -1e9;
   for(const x of legal){
-    let s = evalTable(x.S, p);
-    if(level === 'hard') s -= 0.9 * threat(x.S, p);
-    s += (Math.random()*2 - 1) * noise;
+    let s = evalTable(x.S, p, st);
+    if(st.threat) s -= 0.9 * threat(x.S, p);
+    s += (Math.random()*2 - 1) * st.noise;
     if(s > bs){ bs = s; best = x.m; }
   }
   return best;
