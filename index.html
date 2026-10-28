@@ -241,6 +241,23 @@ function partition(items, v, srcOf = () => null){
   return groups;
 }
 
+/* Like partition, but at least one block must hold no stolen cards (the first block of a new build). */
+function partitionWithBase(items, v, srcOf){
+  const plain = items.filter(x => srcOf(x) == null);
+  let found = null;
+  (function dfs(i, sum, set){
+    if(found) return;
+    if(sum === v){
+      const rest = items.filter(x => !set.includes(x));
+      const g = partition(rest, v, srcOf);
+      if(g) found = [set.slice(), ...g];
+      return;
+    }
+    for(let j=i;j<plain.length;j++){ const t = sum + plain[j].r; if(t <= v){ set.push(plain[j]); dfs(j+1, t, set); set.pop(); } }
+  })(0, 0, []);
+  return found;
+}
+
 /* Largest legal capture for a card of value v */
 function bestCapture(p, v){
   const builds = G.builds.filter(b => b.value === v);
@@ -407,15 +424,21 @@ function doBuild(choiceV){
     return finish(`${s.me.name} added ${cardName(s.c)} to ${prevOwner}'s build, making it ${v}. It's now ${s.me.name}'s.`);
   }
 
-  if(s.piles.length) return say("Cards from other players' piles can only go onto a build you already own.",'err');
-  if(!s.loose.length) return say('Pick the floor cards you want to build with. To just put your card down, use Drift.','err');
-  const items = [s.c, ...s.loose];
+  if(!s.loose.length && !s.piles.length) return say('Pick the floor cards you want to build with. To just put your card down, use Drift.','err');
+  const items = [s.c, ...s.loose, ...pileCards], src = pileSrc(s);
   const cands = [];
   for(let v=1; v<=10; v++){
     if(!hand2.some(x => x.r === v) || oppBuildOf(v)) continue;
-    const g = partition(items, v); if(g) cands.push({v, groups:g});
+    const g = s.piles.length ? partitionWithBase(items, v, src) : partition(items, v); if(g) cands.push({v, groups:g});
   }
   if(!cands.length){
+    if(s.piles.length){
+      const anyV = [...Array(10).keys()].map(i=>i+1).some(v => hand2.some(x => x.r === v) && !oppBuildOf(v) && partition(items, v, src));
+      if(anyV) return say("Your first block can't use stolen cards. Make one block from your card and/or floor cards, then add the stolen ones.",'err');
+      const vNo = [...Array(10).keys()].map(i=>i+1).find(v => !oppBuildOf(v) && partitionWithBase(items, v, src));
+      if(vNo) return say(`That makes a build of ${vNo}, but you don't hold another ${RN(vNo)} to chow it with later.`,'err');
+      return say(`The cards you picked don't split into blocks of one value.`,'err');
+    }
     const sum = items.reduce((a,x)=>a+x.r,0);
     if(sum > 10) return say(`Those add up to ${sum}. Builds can't go above 10.`,'err');
     if(oppBuildOf(sum)) return say(`There's already someone else's build of ${sum}. Only one build of each value is allowed.`,'err');
@@ -426,12 +449,13 @@ function doBuild(choiceV){
   const v = pick.v, mine = ownBuildOf(v);
   const after = G.builds.filter(b => b !== mine).concat([{owner: mine ? mine.owner : me, value:v}]);
   const o = owed(me, hand2, after); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
-  s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x));
+  s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x)); takeFromPiles(s.piles);
   if(mine){ mine.groups.push(...pick.groups); }
   else G.builds.push({ id:'b'+(++G.bseq), value:v, owner:me, groups:pick.groups });
   UI.choice = null;
   const kind = (mine || pick.groups.length > 1) ? 'locked' : 'single';
-  finish(`${s.me.name} built ${v} with ${items.map(cardName).join(' ')} (${kind}).`);
+  const stole = s.piles.length ? `, stealing ${stoleText(s.piles)}` : '';
+  finish(`${s.me.name} built ${v} with ${[s.c, ...s.loose].map(cardName).join(' ')}${stole} (${kind}).`);
 }
 
 function doDrift(){
@@ -477,7 +501,7 @@ function endHand(){
 }
 
 /* ---------- modes ---------- */
-const APP_VERSION = '1.11 · 25 Oct';
+const APP_VERSION = '1.13 · 27 Oct';
 let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
 let DRY = null, BOT = false, SIM = false;
 const LOCAL_KEY = 'kasino-local-v1';
@@ -532,8 +556,8 @@ function subsetsUpTo(arr, k){
 }
 
 /* Keep adding blocks worth v from loose cards and rivals' piles, best-value block first. */
-function greedyBlocks(p, v, used){
-  used = new Set(used); const piles = new Map(), loose = [];
+function greedyBlocks(p, v, used, startPiles){
+  used = new Set(used); const piles = new Map(startPiles || []), loose = [];
   for(let guard=0; guard<12; guard++){
     const avail = G.loose.filter(c => !used.has(c.id)).map(c => ({ c, pile:null }));
     G.players.forEach((pl,i) => {
@@ -552,6 +576,23 @@ function greedyBlocks(p, v, used){
     best.forEach(x => { if(x.pile === null){ used.add(x.c.id); loose.push(x.c.id); } else piles.set(x.pile, (piles.get(x.pile) || 0) + 1); });
   }
   return { loose, piles:[...piles] };
+}
+
+/* One block worth `need` from loose cards and the next card of each rival pile (at most one per pile). */
+function blockFor(p, need, used, startPiles){
+  if(need === 0) return { loose:[], piles:[...(startPiles || [])] };
+  const piles = new Map(startPiles || []);
+  const avail = G.loose.filter(c => !used.includes(c.id)).map(c => ({ c, pile:null }));
+  G.players.forEach((pl,i) => { if(!stealable(p,i)) return; const d = piles.get(i) || 0; if(d < pl.pile.length) avail.push({ c: pl.pile[pl.pile.length-1-d], pile:i }); });
+  let best = null, bw = -1;
+  (function dfs(i, sum, set){
+    if(sum === need){ const w = sumW(set.map(x=>x.c)); if(w > bw){ bw = w; best = set.slice(); } return; }
+    if(set.length >= 3) return;
+    for(let j=i;j<avail.length;j++){ const t = sum + avail[j].c.r; if(t <= need && !set.some(x => x.pile !== null && x.pile === avail[j].pile)){ set.push(avail[j]); dfs(j+1, t, set); set.pop(); } }
+  })(0, 0, []);
+  if(!best) return null;
+  best.forEach(x => { if(x.pile !== null) piles.set(x.pile, (piles.get(x.pile) || 0) + 1); });
+  return { loose: best.filter(x => x.pile === null).map(x => x.c.id), piles:[...piles] };
 }
 
 function candidates(p){
@@ -582,6 +623,27 @@ function candidates(p){
       for(let v=mx; v<=10 && v<=sum; v++){
         if(sum % v || !others.some(x => x.r === v) || oppB.some(b => b.value === v)) continue;
         out.push({ k:'build', c:c.id, loose:S.map(x=>x.id), v });
+        if(sum === v){   // a clean first block: keep going with stolen and floor blocks
+          const ex = greedyBlocks(p, v, S.map(x=>x.id));
+          if(ex.piles.length) out.push({ k:'build', c:c.id, loose:[...S.map(x=>x.id), ...ex.loose], piles:ex.piles, v });
+        }
+      }
+    }
+    // new builds that start from the hand card alone, or from loose cards with the hand card in a later block
+    for(let v=c.r; v<=10; v++){
+      if(!others.some(x => x.r === v) || oppB.some(b => b.value === v) || mineB.some(b => b.value === v)) continue;
+      const bases = [];
+      if(c.r === v) bases.push({ loose:[], piles:[] });
+      for(const T of subs.slice(0, 40)){
+        if(T.reduce((a,x)=>a+x.r,0) !== v) continue;
+        const ids = T.map(x=>x.id), blk = blockFor(p, v - c.r, ids, []);
+        if(blk && blk.piles.length) bases.push({ loose:[...ids, ...blk.loose], piles:blk.piles });
+        if(bases.length > 6) break;
+      }
+      for(const b of bases){
+        const ex = greedyBlocks(p, v, b.loose, b.piles);
+        const piles = ex.piles;
+        if(piles.length) out.push({ k:'build', c:c.id, loose:[...b.loose, ...ex.loose], piles, v });
       }
     }
     // add to a build my side owns
@@ -604,8 +666,11 @@ function candidates(p){
 /* What each level knows how to do. */
 const STYLE = {
   easy:    { randomP:0.3, noise:0.9,  hold:false, farm:false, block:false, threat:false },
-  medium:  { randomP:0,   noise:0.25, hold:true,  farm:true,  block:false, threat:false },
-  hard:    { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true  }
+  medium:  { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true  },
+  // Hard shortlists moves like Medium, then plays the hand out from each one to see which really wins most
+  hard:    { randomP:0,   noise:0.02, hold:true,  farm:true,  block:true,  threat:true, look:true },
+  // the quick player used inside those play-outs
+  rollout: { randomP:0,   noise:0.05, hold:true,  farm:true,  block:false, threat:false }
 };
 
 /* Card count from p's seat: how many of each value could still be in rivals' hands (or the undealt pack). */
@@ -709,9 +774,9 @@ function chooseMove(p, level){
   return best;
 }
 
-function botPlay(){
+function botPlay(chosen){
   const p = G.turn, pl = G.players[p], before = pl.hand.length;
-  const m = chooseMove(p, pl.bot);
+  const m = chosen || chooseMove(p, pl.bot === 'hard' ? 'medium' : pl.bot);
   BOT = true;
   try{
     if(m){ applySel(m); runMove(m); }
@@ -729,23 +794,75 @@ function botPlay(){
   } finally { BOT = false; }
 }
 
+
+/* ---------- Hard: look ahead by playing the hand out ---------- */
+const LOOK_K = 3, LOOK_M = 8;
+function finishOnCopy(m){
+  const real = G, keep = { card:UI.card, loose:UI.loose, builds:UI.builds, piles:UI.piles, choice:UI.choice, msg:UI.msg, msgType:UI.msgType };
+  G = JSON.parse(JSON.stringify(real)); const wasSim = SIM; SIM = true;
+  let after = null;
+  try{ applySel(m); runMove(m); after = G; } finally { G = real; SIM = wasSim; Object.assign(UI, keep); }
+  return after;
+}
+function playoutFrom(S, p, deal){
+  // Deal the cards p can't see (the same deal for every move being compared), then play to the end of the hand.
+  const real = G, T = JSON.parse(JSON.stringify(S)), unknown = deal.slice();
+  T.players.forEach((pl,i) => { if(i !== p) pl.hand = unknown.splice(0, pl.hand.length).sort(byRank); pl.bot = 'rollout'; });
+  T.deck = unknown; T.snaps = []; T.log = [];
+  const keep = { card:UI.card, loose:UI.loose, builds:UI.builds, piles:UI.piles, choice:UI.choice, msg:UI.msg, msgType:UI.msgType };
+  let pts = 0;
+  G = T; const wasSim = SIM; SIM = true;
+  try{
+    let g = 0; while(G.phase === 'play' && g++ < 200) botPlay();
+    if(G.result){ const ms = sideOf(p); G.result.rows.forEach(r => { pts += r.si === ms ? r.pts : -r.pts / (nSides() - 1); }); }
+  } catch(e){ pts = 0; }
+  finally { G = real; SIM = wasSim; BOT = false; Object.assign(UI, keep); }
+  return pts;
+}
+async function chooseMoveLook(p, stillValid){
+  const st = STYLE.hard, legal = [];
+  for(const m of candidates(p)){ const S = tryMove(m); if(S) legal.push({ m, h: evalTable(S, p, st) - 0.9 * threat(S, p) }); }
+  if(!legal.length) return null;
+  legal.sort((a,b) => b.h - a.h);
+  const top = legal.slice(0, LOOK_K);
+  if(top.length === 1) return top[0].m;
+  const known = new Set([...G.players[p].hand, ...G.loose, ...G.builds.flatMap(b=>b.groups.flat()), ...G.players.flatMap(pl=>pl.pile)].map(c=>c.id));
+  const unseen = []; for(const s of SUITS) for(let r=1;r<=10;r++) if(!known.has(s+r)) unseen.push({ id:s+r, r, s });
+  const deals = [...Array(LOOK_M)].map(() => shuffle(unseen.slice()));
+  top.forEach(x => { x.after = finishOnCopy(x.m); x.tot = 0; });
+  let t = Date.now();
+  for(const d of deals) for(const x of top){
+    if(x.after) x.tot += playoutFrom(x.after, p, d);
+    if(Date.now() - t > 30){ await new Promise(r => setTimeout(r, 0)); t = Date.now(); if(!stillValid()) return null; }
+  }
+  top.sort((a,b) => b.tot - a.tot);
+  return top[0].m;
+}
+
 let botTimer = null, botKey = null;
 function scheduleBots(){
   if(!G || G.phase !== 'play' || !G.players[G.turn].bot) return;
-  let delay = 700 + Math.random() * 500;
+  let delay = 700 + Math.random() * 500, extra = 0;
   if(MODE === 'online'){
     const rank = humanSeats().indexOf(mySeat);
     if(rank < 0) return;
-    delay += rank * 2500;   // the first seated human runs the computers; others step in if they've gone
+    extra = rank * 6000; delay += extra;   // the first seated human runs the computers; others step in if they've gone
   }
   const keyNow = () => (MODE === 'online' ? UI.baseV : G.moveNo) + ':' + G.turn + ':' + MODE;
   const key = keyNow();
   if(key === botKey) return;
   botKey = key; clearTimeout(botTimer);
-  botTimer = setTimeout(() => {
-    if(!G || G.phase !== 'play' || !G.players[G.turn].bot || keyNow() !== key) return;
-    botPlay();
-  }, delay);
+  const valid = () => G && G.phase === 'play' && G.players[G.turn].bot && keyNow() === key;
+  const lookAhead = G.players[G.turn].bot === 'hard';
+  botTimer = setTimeout(async () => {
+    if(!valid()) return;
+    if(!lookAhead) return botPlay();
+    const t0 = Date.now();
+    const m = await chooseMoveLook(G.turn, valid);
+    if(!valid()) return;
+    const wait = Math.max(0, 700 - (Date.now() - t0));   // don't move faster than a person can follow
+    setTimeout(() => { if(valid()) botPlay(m); }, wait);
+  }, lookAhead ? 200 + extra : delay);
 }
 
 /* ---------- online: Firebase ---------- */
@@ -1049,7 +1166,8 @@ function renderSheet(){
         <li>To add to a build you own, play one card from your hand into a block (on its own if it matches). Then keep adding blocks from any mix of floor cards and rivals' piles, digging as far down a pile as the cards add up.</li>
         <li>When you chow a build or a matching loose card, you can take extra blocks of that value from floor cards and rivals' piles in the same move.</li>
         <li>Each block can use only one card from any one pile. Once a pile's top card has gone into a block, the card under it is open for the next block.</li>
-        <li>Stealing needs a build or a matching loose card to go with. You can't steal into a brand-new build, and you can never chow straight off a pile.</li>
+        <li>You can steal as soon as a build has a first block, even a build you're starting this turn. The first block can't use stolen cards: it can be your hand card on its own, cards from the floor, or both. You still need another card of that value to chow it later.</li>
+        <li>Stealing needs a build or a matching loose card to go with, and you can never chow straight off a pile.</li>
         <li>Only one build of each value can be on the floor.</li></ul>
       <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>
       <h3>Scoring each hand</h3><ul>
