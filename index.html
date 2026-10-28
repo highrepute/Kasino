@@ -261,8 +261,18 @@ function partitionWithBase(items, v, srcOf){
 /* Largest legal capture for a card of value v */
 function bestCapture(p, v){
   const builds = G.builds.filter(b => b.value === v);
-  if(!builds.length && !G.loose.some(c => c.r === v)) return null;
-  const piles = G.players.map((_,i)=>i).filter(i => stealable(p,i));
+  if(!builds.length && !G.loose.length) return null;
+  const r = bestCaptureFrom(p, v, builds, true);
+  // Without a build, at least one set has to come from the floor alone
+  if(r && !builds.length && !floorOnlySet(r, v)) return bestCaptureFrom(p, v, builds, false);
+  return r;
+}
+function floorOnlySet(r, v){
+  const loose = r.loose, piles = r.piles.map(i => topOf(i));
+  return !!partitionWithBase([...loose, ...piles], v, c => piles.includes(c) ? 'p' + piles.indexOf(c) : null);
+}
+function bestCaptureFrom(p, v, builds, withPiles){
+  const piles = withPiles ? G.players.map((_,i)=>i).filter(i => stealable(p,i)) : [];
   const items = [...G.loose.map(c=>({c, pile:null})), ...piles.map(i=>({c:topOf(i), pile:i}))].slice(0,30);
   const subs = [];
   (function dfs(i, sum, mask, k){
@@ -367,9 +377,12 @@ function doChow(){
   if(wrong) return say(`That build is worth ${wrong.value}. You need a ${RN(wrong.value)} to chow it.`,'err');
   const pileCards = s.piles.flatMap(x => x.cards);
   const items = [...s.loose, ...pileCards];
-  if(!s.builds.length && !s.loose.some(x => x.r === v))
-    return say(`To take sets of ${v}, you need a loose ${RN(v)} or a build of ${v} to chow as well. Otherwise build them first.`,'err');
-  if(items.length && !partition(items, v, pileSrc(s))){
+  if(!s.builds.length && !s.loose.length)
+    return say("You can't chow straight off a pile. Take something from the floor as well: a build, a matching card or a set that adds up.",'err');
+  const ok = s.builds.length ? partition(items, v, pileSrc(s)) : partitionWithBase(items, v, pileSrc(s));
+  if(!ok && !s.builds.length && s.piles.length && partition(items, v, pileSrc(s)))
+    return say("You can't chow straight off a pile. At least one set has to come from the floor alone.",'err');
+  if(items.length && !ok){
     const twoFromOne = s.piles.some(x => x.d > 1) && partition(items, v);
     return say(twoFromOne ? `Each block can only use one card from any one pile.` : `The cards you picked don't split into sets that each add up to ${v}.`,'err');
   }
@@ -397,31 +410,55 @@ function doBuild(choiceV){
   if(s.builds.length > 1) return say('Build onto one build at a time.','err');
 
   if(s.builds.length === 1){
-    const B = s.builds[0];
-    if(sameSide(B.owner, me)){
-      const v = B.value; const groups = partition([s.c, ...s.loose, ...pileCards], v, pileSrc(s));
-      if(!groups && s.piles.some(x => x.d > 1) && partition([s.c, ...s.loose, ...pileCards], v)) return say('Each block can only use one card from any one pile.','err');
-      if(!groups) return say(`To add to the build of ${v}, your card plus the cards you pick must make sets of ${v}.`,'err');
+    const B = s.builds[0], ownSide = sameSide(B.owner, me);
+    const extra = [s.c, ...s.loose];
+    // Option 1 (your side's build): add blocks of the same value
+    const addGroups = ownSide ? partition([s.c, ...s.loose, ...pileCards], B.value, pileSrc(s)) : null;
+    // Option 2 (any single build): raise it with your hand card plus loose cards, no stolen cards
+    const raiseV = B.value + extra.reduce((a,x) => a + x.r, 0);
+    const ob = oppBuildOf(raiseV);
+    const canRaise = B.groups.length === 1 && !s.piles.length && raiseV <= 10 && hand2.some(x => x.r === raiseV) && !(ob && ob !== B);
+    let mode = null;
+    if(choiceV) mode = (addGroups && choiceV === B.value) ? 'add' : (canRaise && choiceV === raiseV) ? 'raise' : null;
+    else if(addGroups && canRaise){
+      UI.choice = [{ v:B.value, groups:[...B.groups, ...addGroups] }, { v:raiseV, groups:[[...B.groups[0], ...extra]] }];
+      return render();
+    } else mode = addGroups ? 'add' : canRaise ? 'raise' : null;
+
+    if(!mode){
+      if(ownSide && s.piles.some(x => x.d > 1) && partition([s.c, ...s.loose, ...pileCards], B.value)) return say('Each block can only use one card from any one pile.','err');
+      if(s.piles.length && !ownSide) return say("Stolen cards can't be used to raise a build.",'err');
+      if(B.groups.length > 1) return say(ownSide ? `To add to the build of ${B.value}, your card plus the cards you pick must make sets of ${B.value}. It's locked, so it can't be raised.` : `That build of ${B.value} is locked. You can only chow it.`,'err');
+      if(raiseV > 10) return say(ownSide ? `To add to the build of ${B.value}, make sets of ${B.value}. Raising it would make ${raiseV}, and builds can't go above 10.` : `That would make ${raiseV}. Builds can't go above 10.`,'err');
+      if(s.piles.length) return say("Stolen cards can't be used to raise a build.",'err');
+      if(!hand2.some(x => x.r === raiseV)) return say(`To raise it to ${raiseV} you'd need another ${RN(raiseV)} in your hand.`,'err');
+      return say(`There's already someone else's build of ${raiseV} on the floor.`,'err');
+    }
+
+    if(mode === 'add'){
+      const v = B.value;
       const o = owed(me, hand2, G.builds); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
       s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x)); takeFromPiles(s.piles);
-      B.groups.push(...groups);
+      B.groups.push(...addGroups);
+      UI.choice = null;
       const stole = s.piles.length ? `, stealing ${stoleText(s.piles)}` : '';
-      return finish(`${s.me.name} added ${[s.c, ...s.loose].map(cardName).join(' ')} to the build of ${v}${stole}. It's now locked.`);
+      return finish(`${s.me.name} added ${extra.map(cardName).join(' ')} to the build of ${v}${stole}. It's now locked.`);
     }
-    if(s.loose.length || s.piles.length) return say("You can change someone else's build only by adding one card from your hand. Unpick the other cards.",'err');
-    if(B.groups.length > 1) return say(`That build of ${B.value} is locked. You can only chow it.`,'err');
-    const v = B.value + s.c.r;
-    if(v > 10) return say(`That would make ${v}. Builds can't go above 10.`,'err');
-    if(!hand2.some(x => x.r === v)) return say(`You'd need another ${RN(v)} in your hand to make it ${v}.`,'err');
-    const ob = oppBuildOf(v); if(ob && ob !== B) return say(`There's already someone else's build of ${v} on the floor.`,'err');
-    const mine = ownBuildOf(v);
-    const after = G.builds.filter(b => b !== B && b !== mine).concat([{owner:me, value:v}]);
+
+    const v = raiseV, old = B.value;
+    const mine = G.builds.find(b => b !== B && b.value === v && sameSide(b.owner, me));
+    if(B.owner !== me && !mine && G.builds.some(b => b.owner === me && b !== B)) return say('You already have a build on the floor, and you can only have one at a time. Add to it, raise it or chow it first.','err');
+    const after = G.builds.filter(b => b !== B && b !== mine).concat([{ owner:me, value:v }]);
     const o = owed(me, hand2, after); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
-    const prevOwner = G.players[B.owner].name;
-    s.me.hand = hand2; B.groups[0].push(s.c);
+    const prevOwner = G.players[B.owner].name, wasMine = B.owner === me;
+    s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x));
+    B.groups[0].push(...extra);
     if(mine){ mine.groups.push(B.groups[0]); G.builds = G.builds.filter(b => b !== B); }
     else { B.value = v; B.owner = me; }
-    return finish(`${s.me.name} added ${cardName(s.c)} to ${prevOwner}'s build, making it ${v}. It's now ${s.me.name}'s.`);
+    UI.choice = null;
+    return finish(wasMine
+      ? `${s.me.name} raised their build of ${old} to ${v} with ${extra.map(cardName).join(' ')}.`
+      : `${s.me.name} added ${extra.map(cardName).join(' ')} to ${prevOwner}'s build, making it ${v}. It's now ${s.me.name}'s.`);
   }
 
   if(!s.loose.length && !s.piles.length) return say('Pick the floor cards you want to build with. To just put your card down, use Drift.','err');
@@ -447,6 +484,7 @@ function doBuild(choiceV){
   const pick = choiceV ? cands.find(x => x.v === choiceV) : (cands.length === 1 ? cands[0] : null);
   if(!pick){ UI.choice = cands; return render(); }
   const v = pick.v, mine = ownBuildOf(v);
+  if(!mine && G.builds.some(b => b.owner === me)) return say('You already have a build on the floor, and you can only have one at a time. Add to it, raise it or chow it first.','err');
   const after = G.builds.filter(b => b !== mine).concat([{owner: mine ? mine.owner : me, value:v}]);
   const o = owed(me, hand2, after); if(o) return say(`You need to keep a ${RN(o)} to chow your build of ${o}.`,'err');
   s.me.hand = hand2; G.loose = G.loose.filter(x => !s.loose.includes(x)); takeFromPiles(s.piles);
@@ -502,7 +540,7 @@ function endHand(){
 }
 
 /* ---------- modes ---------- */
-const APP_VERSION = '1.15 · 28 Oct';
+const APP_VERSION = '1.17 · 28 Oct';
 let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
 let DRY = null, BOT = false, SIM = false;
 const LOCAL_KEY = 'kasino-local-v1';
@@ -608,11 +646,13 @@ function candidates(p){
     // chow
     const bv = G.builds.filter(b => b.value === c.r);
     if(G.house){
-      const singles = L.filter(x => x.r === c.r).map(x => x.id);
-      if(bv.length || singles.length){
-        out.push({ k:'chow', c:c.id, loose:singles, builds:bv.map(b=>b.id) });
-        const ex = greedyBlocks(p, c.r, singles);
-        if(ex.loose.length || ex.piles.length) out.push({ k:'chow', c:c.id, loose:[...singles, ...ex.loose], builds:bv.map(b=>b.id), piles:ex.piles });
+      const b = bestCapture(p, c.r);
+      if(b){
+        const base = b.loose.map(x => x.id), piles0 = b.piles.map(i => [i,1]);
+        out.push({ k:'chow', c:c.id, loose:base, builds:b.builds.map(x=>x.id), piles:piles0 });
+        const ex = greedyBlocks(p, c.r, base, piles0);
+        if(ex.loose.length || ex.piles.length !== piles0.length || ex.piles.some(([i,d]) => d > 1))
+          out.push({ k:'chow', c:c.id, loose:[...base, ...ex.loose], builds:b.builds.map(x=>x.id), piles:ex.piles });
       }
     } else {
       const b = bestCapture(p, c.r);
@@ -653,13 +693,19 @@ function candidates(p){
       if(c.r === v) bases.push([]);
       else if(c.r < v) for(const S of subs) if(c.r + S.reduce((a,x)=>a+x.r,0) === v) bases.push(S.map(x=>x.id));
       for(const base of bases.slice(0,6)){
-        out.push({ k:'build', c:c.id, builds:[B.id], loose:base });
+        out.push({ k:'build', c:c.id, builds:[B.id], loose:base, v });
         const ex = greedyBlocks(p, v, base);
-        if(ex.loose.length || ex.piles.length) out.push({ k:'build', c:c.id, builds:[B.id], loose:[...base, ...ex.loose], piles:ex.piles });
+        if(ex.loose.length || ex.piles.length) out.push({ k:'build', c:c.id, builds:[B.id], loose:[...base, ...ex.loose], piles:ex.piles, v });
       }
     }
-    // raise a rival's single build
-    for(const B of oppB) if(B.groups.length === 1 && B.value + c.r <= 10) out.push({ k:'build', c:c.id, builds:[B.id] });
+    // raise a single build (anyone's) with the hand card plus loose cards
+    for(const B of G.builds){
+      if(B.groups.length !== 1) continue;
+      for(const S of [[], ...subs.filter(x => x.length <= 2)]){
+        const v = B.value + c.r + S.reduce((a,x)=>a+x.r,0);
+        if(v <= 10 && others.some(x => x.r === v)) out.push({ k:'build', c:c.id, builds:[B.id], loose:S.map(x=>x.id), v });
+      }
+    }
   }
   return out;
 }
@@ -1159,17 +1205,17 @@ function renderSheet(){
         <li>The loser of each hand plays first in the next.</li></ul>
       
       <h3>Your turn</h3><p>You play exactly one card, in one of three ways.</p><ul>
-        <li><b>Chow</b> (capture): a card takes loose cards of the same value and any build of that value. When it does, it can also take extra blocks of that value from loose cards and rivals' piles. A loose set like 3+4 can't be chowed on its own; build it first.</li>
+        <li><b>Chow</b> (capture): a card takes loose cards of the same value, loose sets that add up to it (like 3+4 with a 7) and any build of that value. It can also take extra blocks of that value from rivals' piles in the same move.</li>
         <li><b>Build</b>: put your card with floor cards to make a total of 10 or less. You must hold another card of that value to chow it on a later turn.</li>
         <li><b>Drift</b>: put your card down on its own. You can drift even while you own a build, but never your last card of that build's value.</li></ul>
       <h3>Builds and stealing</h3><ul>
-        <li>A build with one block, like 5+3, can be raised by a rival adding one card from their hand, if they hold the new total. It then belongs to them. Once a second block goes on, it's locked and can only be chowed.</li>
+        <li>A build with one block, like 5+3, can be raised by anyone, its owner included: add one card from your hand, plus any loose cards from the floor, if you hold the new total. Stolen cards can't be used to raise. A raised build belongs to whoever raised it and stays single. Once a second block goes on, it's locked and can't be raised.</li>
         <li>To add to a build you own, play one card from your hand into a block (on its own if it matches). Then keep adding blocks from any mix of floor cards and rivals' piles, digging as far down a pile as the cards add up.</li>
         <li>When you chow a build or a matching loose card, you can take extra blocks of that value from floor cards and rivals' piles in the same move.</li>
         <li>Each block can use only one card from any one pile. Once a pile's top card has gone into a block, the card under it is open for the next block.</li>
         <li>You can steal as soon as a build has a first block, even a build you're starting this turn. The first block can't use stolen cards: it can be your hand card on its own, cards from the floor, or both. You still need another card of that value to chow it later.</li>
-        <li>Stealing needs a build or a matching loose card to go with, and you can never chow straight off a pile.</li>
-        <li>Only one build of each value can be on the floor.</li></ul>
+        <li>Stealing needs something from the floor to go with: a build, a matching loose card or a loose set. You can never chow straight off a pile.</li>
+        <li>Only one build of each value can be on the floor, and each player can only have one build at a time.</li></ul>
       <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>
       <h3>Scoring each hand</h3><ul>
         <li>Most cards: 2 points (a tie gives 1 each)</li>
