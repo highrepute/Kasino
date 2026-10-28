@@ -485,9 +485,10 @@ function endHand(){
       spy: cards.some(c=>c.s==='S'&&c.r===2), mummy: cards.some(c=>c.s==='D'&&c.r===10), aces: cards.filter(c=>c.r===1).length };
   });
   const mx = Math.max(...rows.map(r=>r.cards)), lead = rows.filter(r=>r.cards===mx).length;
+  const maxSp = Math.max(...rows.map(r=>r.spades)), spLead = rows.filter(r=>r.spades===maxSp).length;
   rows.forEach(r => {
     r.mostPts = r.cards === mx ? (lead === 1 ? 2 : 1) : 0;
-    r.spadePts = r.spades >= 5 ? 1 : 0;
+    r.spadePts = r.spades === maxSp ? (spLead === 1 ? 2 : 1) : 0;
     r.pts = r.mostPts + r.spadePts + (r.spy?1:0) + (r.mummy?2:0) + r.aces;
     G.scores[r.si] += r.pts;
   });
@@ -501,7 +502,7 @@ function endHand(){
 }
 
 /* ---------- modes ---------- */
-const APP_VERSION = '1.13 · 27 Oct';
+const APP_VERSION = '1.15 · 28 Oct';
 let MODE = null;            // null = home screen · 'online' · 'pass' (one phone) · 'cpu' (vs computer)
 let DRY = null, BOT = false, SIM = false;
 const LOCAL_KEY = 'kasino-local-v1';
@@ -525,7 +526,7 @@ function clearLocal(){ try{ localStorage.removeItem(LOCAL_KEY); }catch(e){} }
 
 /* ---------- computer player ---------- */
 // Rough worth of a card to whoever ends up with it: most cards (2 pts), spades, and the point cards.
-const W = c => 0.22 + (c.s === 'S' ? 0.12 : 0) + (c.r === 1 ? 1 : 0) + (c.r === 10 && c.s === 'D' ? 2 : 0) + (c.r === 2 && c.s === 'S' ? 1 : 0);
+const W = c => 0.22 + (c.s === 'S' ? 0.2 : 0) + (c.r === 1 ? 1 : 0) + (c.r === 10 && c.s === 'D' ? 2 : 0) + (c.r === 2 && c.s === 'S' ? 1 : 0);
 const sumW = cards => cards.reduce((a,c) => a + W(c), 0);
 
 function applySel(m){
@@ -1127,7 +1128,7 @@ function renderHandEnd(){
   const pts = (n, p) => p ? `${n} <b style="color:var(--gold)">+${p}</b>` : `${n}`;
   const table = `<div class="tablewrap"><table class="score"><thead><tr><th></th>${cols}</tr></thead><tbody>
     ${row('Cards (most: 2)', r => pts(r.cards, r.mostPts))}
-    ${row('Spades (5+: 1)', r => pts(r.spades, r.spadePts))}
+    ${row('Spades (most: 2)', r => pts(r.spades, r.spadePts))}
     ${row('Spy two 2♠', r => r.spy ? '<b style="color:var(--gold)">+1</b>' : '–')}
     ${row('Razzer 10♦', r => r.mummy ? '<b style="color:var(--gold)">+2</b>' : '–')}
     ${row('Aces (1 each)', r => pts(r.aces, r.aces))}
@@ -1172,7 +1173,7 @@ function renderSheet(){
       <h3>Piles</h3><p>Chowed cards go face up on your pile. The cards of the chowed value go on top, then aces, the razzer (10♦) and the 2♠, then the rest in build order. So a big chow leaves you exposed. Whoever chows last in the hand takes everything left on the floor.</p>
       <h3>Scoring each hand</h3><ul>
         <li>Most cards: 2 points (a tie gives 1 each)</li>
-        <li>At least five spades: 1 point</li>
+        <li>Most spades: 2 points (if tied the tying players get one point each)</li>
         <li>Spy two, the 2♠: 1 point</li>
         <li>Razzer, the 10♦: 2 points</li>
         <li>Each ace: 1 point</li></ul>
